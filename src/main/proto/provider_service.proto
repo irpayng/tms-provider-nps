@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "com.provider.nps.grpc";
+
+package provider;
+
+service ProviderService {
+  rpc Execute (ProviderExecuteRequest) returns (ProviderExecuteResponse);
+}
+
+message ProviderExecuteRequest {
+  string action = 1;           // name-enquiry, bank-transfer, requery
+  string reference = 2;        // Our transaction reference
+  double amount = 3;           // Amount in Naira (for bank-transfer)
+  map<string, string> metadata = 4;  // Additional data (account numbers, names, etc.)
+}
+
+message ProviderExecuteResponse {
+  string status = 1;           // SUCCESS, FAILED, PENDING
+  string message = 2;          // Human-readable message
+  string provider_reference = 3;  // NPS transaction ID (MsgId)
+  string response_code = 4;    // NPS response code
+  string request_iso_hex = 5;  // Raw XML request (for logging/debugging)
+  string response_iso_hex = 6; // Raw XML response (for logging/debugging)
+  string data_json = 7;        // JSON with structured response data
+}
