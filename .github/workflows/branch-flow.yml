@@ -1,0 +1,37 @@
+name: Branch Flow Guard
+
+# Enforces the staging → main promotion ladder. PRs that target main
+# from any head other than `staging` are rejected by this check, which
+# branch protection requires before a merge can complete.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  enforce-promotion-path:
+    name: Enforce promotion path
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Validate base ← head
+        env:
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          echo "PR opened: ${HEAD} → ${BASE}"
+          if [ "${BASE}" = "main" ] && [ "${HEAD}" != "staging" ]; then
+            echo "::error::Only the 'staging' branch may PR to 'main'. This PR is from '${HEAD}'."
+            echo ""
+            echo "The promotion ladder is staging → main. Land your work"
+            echo "on staging first (where it gets validated by the staging CI"
+            echo "build), then PR staging → main once verified."
+            exit 1
+          fi
+          echo "✅ Promotion path is valid: ${HEAD} → ${BASE}"

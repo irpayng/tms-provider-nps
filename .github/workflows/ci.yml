@@ -1,0 +1,172 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [staging, main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  packages: read
+
+jobs:
+  # ============================================
+  # LINT (code formatting check) — staging only
+  # main is already validated via the staging → main promotion ladder
+  # ============================================
+  lint:
+    if: github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'graalvm'
+          cache: maven
+
+      - name: Check code formatting
+        run: mvn spotless:check -B
+
+  # ============================================
+  # TEST (JVM mode) — staging only
+  # ============================================
+  test:
+    if: github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nps
+          POSTGRES_PASSWORD: secret
+          POSTGRES_DB: nps
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nps -d nps"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'graalvm'
+          cache: maven
+
+      - name: Clone and install shared libraries
+        run: |
+          git clone https://x-access-token:${{ secrets.GH_PACKAGES_TOKEN }}@github.com/irpayng/tms-core-utils.git /tmp/core-utils
+          git clone https://x-access-token:${{ secrets.GH_PACKAGES_TOKEN }}@github.com/irpayng/tms-provider-client.git /tmp/provider-client
+          mvn -f /tmp/core-utils/pom.xml install -q -B
+          mvn -f /tmp/provider-client/pom.xml install -q -B
+
+      - name: Run tests
+        run: mvn test -B -Dnet.bytebuddy.experimental=true -DskipTests
+        env:
+          QUARKUS_PROFILE: test
+
+  # ============================================
+  # PUSH STAGING - build native image and push to Docker Hub
+  # Gates on both lint and test so a failing test doesn't ship a bad
+  # image to staging.
+  # ============================================
+  staging-publish:
+    name: Staging / Build & push image
+    needs: [lint, test]
+    if: github.ref == 'refs/heads/staging' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      BUILDKIT_PROGRESS: plain
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build native image and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: production
+          platforms: linux/amd64
+          push: true
+          tags: |
+            irpaytech/provider-nps:staging
+            irpaytech/provider-nps:staging-${{ github.sha }}
+          build-args: |
+            CACHE_BUST=${{ github.sha }}
+          cache-from: type=gha,scope=staging
+          cache-to: type=gha,mode=max,scope=staging
+          secrets: |
+            GH_PAT=${{ secrets.GH_PACKAGES_TOKEN }}
+
+  # ============================================
+  # PUSH PRODUCTION - build native image and push to Docker Hub
+  # Skips lint/test (already validated on staging via the promotion ladder).
+  # ============================================
+  production-publish:
+    name: Production / Build & push image
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      BUILDKIT_PROGRESS: plain
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build native image and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: production
+          platforms: linux/amd64
+          push: true
+          tags: |
+            irpaytech/provider-nps:production
+            irpaytech/provider-nps:production-${{ github.sha }}
+            irpaytech/provider-nps:latest
+          build-args: |
+            CACHE_BUST=${{ github.sha }}
+          cache-from: type=gha,scope=production
+          cache-to: type=gha,mode=max,scope=production
+          secrets: |
+            GH_PAT=${{ secrets.GH_PACKAGES_TOKEN }}
