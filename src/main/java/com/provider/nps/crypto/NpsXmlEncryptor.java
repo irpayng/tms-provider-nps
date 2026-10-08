@@ -1,22 +1,20 @@
 package com.provider.nps.crypto;
 
-import java.io.FileInputStream;
+import com.provider.nps.xml.NpsXml;
+import io.quarkus.logging.Log;
+import jakarta.annotation.PostConstruct;
+import jakarta.enterprise.context.ApplicationScoped;
 import java.io.StringReader;
 import java.io.StringWriter;
-import java.security.KeyFactory;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SecureRandom;
-import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
-import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.Base64;
-
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.transform.OutputKeys;
@@ -24,20 +22,15 @@ import javax.xml.transform.Transformer;
 import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
-
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 import org.xml.sax.InputSource;
 
-import io.quarkus.logging.Log;
-import jakarta.annotation.PostConstruct;
-import jakarta.enterprise.context.ApplicationScoped;
-
 /**
- * NPS XML Encryption utility.
- * Implements AES-256-GCM content encryption with RSA-OAEP key wrapping as per NPS spec.
+ * NPS XML Encryption utility. Implements AES-256-GCM content encryption with
+ * RSA-OAEP key wrapping as per NPS spec.
  * 
  * Uses W3C XML Encryption standard (xenc namespace).
  */
@@ -67,8 +60,7 @@ public class NpsXmlEncryptor {
     @PostConstruct
     void init() {
         try {
-            documentBuilderFactory = DocumentBuilderFactory.newInstance();
-            documentBuilderFactory.setNamespaceAware(true);
+            documentBuilderFactory = NpsXml.newDocumentBuilderFactory();
             secureRandom = new SecureRandom();
 
             loadKeys();
@@ -80,59 +72,17 @@ public class NpsXmlEncryptor {
     }
 
     private void loadKeys() throws Exception {
-        privateKey = loadPrivateKey(privateKeyPath);
-        nibssPublicKey = loadPublicKeyFromCert(nibssPublicKeyPath);
-        certificate = loadCertificate(certificatePath);
-    }
-
-    private PrivateKey loadPrivateKey(String path) throws Exception {
-        String pem = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(path)));
-        String base64 = pem
-                .replace("-----BEGIN PRIVATE KEY-----", "")
-                .replace("-----END PRIVATE KEY-----", "")
-                .replace("-----BEGIN RSA PRIVATE KEY-----", "")
-                .replace("-----END RSA PRIVATE KEY-----", "")
-                .replaceAll("\\s", "");
-
-        byte[] keyBytes = Base64.getDecoder().decode(base64);
-        PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(keyBytes);
-        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
-        return keyFactory.generatePrivate(keySpec);
-    }
-
-    private PublicKey loadPublicKeyFromCert(String path) throws Exception {
-        // Try loading as certificate first
-        try (FileInputStream fis = new FileInputStream(path)) {
-            CertificateFactory cf = CertificateFactory.getInstance("X.509");
-            X509Certificate cert = (X509Certificate) cf.generateCertificate(fis);
-            return cert.getPublicKey();
-        } catch (Exception e) {
-            // Fall back to loading as raw public key
-            String pem = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(path)));
-            String base64 = pem
-                    .replace("-----BEGIN PUBLIC KEY-----", "")
-                    .replace("-----END PUBLIC KEY-----", "")
-                    .replaceAll("\\s", "");
-
-            byte[] keyBytes = Base64.getDecoder().decode(base64);
-            java.security.spec.X509EncodedKeySpec keySpec = new java.security.spec.X509EncodedKeySpec(keyBytes);
-            KeyFactory keyFactory = KeyFactory.getInstance("RSA");
-            return keyFactory.generatePublic(keySpec);
-        }
-    }
-
-    private X509Certificate loadCertificate(String path) throws Exception {
-        try (FileInputStream fis = new FileInputStream(path)) {
-            CertificateFactory cf = CertificateFactory.getInstance("X.509");
-            return (X509Certificate) cf.generateCertificate(fis);
-        }
+        privateKey = NpsPemKeys.privateKey(privateKeyPath);
+        nibssPublicKey = NpsPemKeys.publicKey(nibssPublicKeyPath);
+        certificate = NpsPemKeys.certificate(certificatePath);
     }
 
     /**
-     * Encrypts the Document element of an ISO 20022 message.
-     * Uses AES-256-GCM for content and RSA-OAEP for key wrapping.
+     * Encrypts the Document element of an ISO 20022 message. Uses AES-256-GCM for
+     * content and RSA-OAEP for key wrapping.
      * 
-     * @param xml The signed XML message to encrypt
+     * @param xml
+     *            The signed XML message to encrypt
      * @return The encrypted XML message with EncryptedData structure
      */
     public String encrypt(String xml) throws Exception {
@@ -233,7 +183,8 @@ public class NpsXmlEncryptor {
     /**
      * Decrypts an incoming NPS message containing EncryptedData.
      * 
-     * @param xml The encrypted XML message
+     * @param xml
+     *            The encrypted XML message
      * @return The decrypted XML message with Document element restored
      */
     public String decrypt(String xml) throws Exception {

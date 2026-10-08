@@ -1,9 +1,5 @@
 package com.provider.nps.grpc;
 
-import java.math.BigDecimal;
-
-import java.math.BigDecimal;
-
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.provider.nps.client.NpsClient;
 import com.provider.nps.client.NpsClient.NpsResponse;
@@ -16,20 +12,19 @@ import com.provider.nps.message.NpsResponseParser.PaymentStatusResponse;
 import com.provider.nps.message.Pacs008Builder;
 import com.provider.nps.message.Pacs008Builder.CreditTransferRequest;
 import com.provider.nps.message.Pacs028Builder;
-
+import com.provider.nps.xml.NpsXml;
 import io.grpc.stub.StreamObserver;
 import io.quarkus.grpc.GrpcService;
 import io.quarkus.logging.Log;
 import io.smallrye.common.annotation.Blocking;
 import jakarta.inject.Inject;
+import java.math.BigDecimal;
 
 /**
  * gRPC service implementation for NPS (NIBSS National Payment Stack).
  * 
- * Handles ISO 20022 message flows:
- * - name-enquiry: acmt.023 -> acmt.024
- * - bank-transfer: pacs.008 -> pacs.002
- * - requery: pacs.028 -> pacs.002
+ * Handles ISO 20022 message flows: - name-enquiry: acmt.023 -> acmt.024 -
+ * bank-transfer: pacs.008 -> pacs.002 - requery: pacs.028 -> pacs.002
  */
 @GrpcService
 @Blocking
@@ -66,8 +61,7 @@ public class ProviderGrpcService extends ProviderServiceGrpc.ProviderServiceImpl
             default -> ProviderResponse.failed("Unknown action: " + request.getAction(), request.getReference());
         };
 
-        ProviderExecuteResponse.Builder resp = ProviderExecuteResponse.newBuilder()
-                .setStatus(nullSafe(result.status))
+        ProviderExecuteResponse.Builder resp = ProviderExecuteResponse.newBuilder().setStatus(nullSafe(result.status))
                 .setMessage(nullSafe(result.message));
 
         if (result.providerReference != null)
@@ -86,8 +80,7 @@ public class ProviderGrpcService extends ProviderServiceGrpc.ProviderServiceImpl
     }
 
     /**
-     * Name enquiry via acmt.023.
-     * Required metadata: account_number, bank_code
+     * Name enquiry via acmt.023. Required metadata: account_number, bank_code
      * Optional metadata: channel_code (default: 1)
      */
     private ProviderResponse handleNameEnquiry(ProviderExecuteRequest request) {
@@ -120,30 +113,24 @@ public class ProviderGrpcService extends ProviderServiceGrpc.ProviderServiceImpl
             }
 
             // Parse acmt.024 response
-            NameEnquiryResponse enquiryResponse = responseParser.parseNameEnquiryResponse(
-                    npsResponse.getDecryptedResponse());
+            NameEnquiryResponse enquiryResponse = responseParser
+                    .parseNameEnquiryResponse(npsResponse.getDecryptedResponse());
 
             if (enquiryResponse.isSuccess()) {
-                String dataJson = objectMapper.writeValueAsString(new NameEnquiryData(
-                        enquiryResponse.getAccountName(),
-                        enquiryResponse.getAccountNumber(),
-                        enquiryResponse.getBvn(),
-                        enquiryResponse.getBankCode(),
-                        enquiryResponse.getSessionId(),
-                        npsResponse.getMessageId()));
+                String dataJson = objectMapper.writeValueAsString(new NameEnquiryData(enquiryResponse.getAccountName(),
+                        enquiryResponse.getAccountNumber(), enquiryResponse.getBvn(), enquiryResponse.getBankCode(),
+                        enquiryResponse.getSessionId(), npsResponse.getMessageId()));
 
-                ProviderResponse resp = ProviderResponse.successWithData(
-                        enquiryResponse.getAccountName(), ref, dataJson);
+                ProviderResponse resp = ProviderResponse.successWithData(enquiryResponse.getAccountName(), ref,
+                        dataJson);
                 resp.providerReference = npsResponse.getMessageId();
                 resp.requestXml = npsResponse.getRawRequest();
                 resp.responseXml = npsResponse.getRawResponse();
                 return resp;
             } else {
-                ProviderResponse resp = ProviderResponse.failedWithCode(
-                        enquiryResponse.getErrorMessage() != null ? 
-                                enquiryResponse.getErrorMessage() : "Account verification failed",
-                        enquiryResponse.getReasonCode(),
-                        ref);
+                ProviderResponse resp = ProviderResponse.failedWithCode(enquiryResponse.getErrorMessage() != null
+                        ? enquiryResponse.getErrorMessage()
+                        : "Account verification failed", enquiryResponse.getReasonCode(), ref);
                 resp.requestXml = npsResponse.getRawRequest();
                 resp.responseXml = npsResponse.getRawResponse();
                 return resp;
@@ -157,13 +144,14 @@ public class ProviderGrpcService extends ProviderServiceGrpc.ProviderServiceImpl
     }
 
     /**
-     * Bank transfer via pacs.008.
-     * Required metadata: account_number, account_name, bank_code, debtor_name, debtor_account
-     * Optional: narration, debtor_bvn, channel_code, kyc_level, session_id (from name enquiry)
+     * Bank transfer via pacs.008. Required metadata: account_number, account_name,
+     * bank_code, debtor_name, debtor_account Optional: narration, debtor_bvn,
+     * channel_code, kyc_level, session_id (from name enquiry)
      */
     private ProviderResponse handleBankTransfer(ProviderExecuteRequest request) {
         String ref = request.getReference();
         long startTime = System.currentTimeMillis();
+        String originalMessageId = null;
 
         try {
             // Validate required fields
@@ -174,16 +162,15 @@ public class ProviderGrpcService extends ProviderServiceGrpc.ProviderServiceImpl
             String debtorAccount = request.getMetadataOrDefault("debtor_account", "");
 
             if (creditorAccount.isBlank() || creditorName.isBlank() || creditorBankCode.isBlank()) {
-                return ProviderResponse.failed(
-                        "Missing required metadata: account_number, account_name, bank_code", ref);
+                return ProviderResponse.failed("Missing required metadata: account_number, account_name, bank_code",
+                        ref);
             }
 
             if (debtorName.isBlank() || debtorAccount.isBlank()) {
-                return ProviderResponse.failed(
-                        "Missing required metadata: debtor_name, debtor_account", ref);
+                return ProviderResponse.failed("Missing required metadata: debtor_name, debtor_account", ref);
             }
 
-            if (request.getAmount() <= 0) {
+            if (!Double.isFinite(request.getAmount()) || request.getAmount() <= 0) {
                 return ProviderResponse.failed("Invalid amount", ref);
             }
 
@@ -206,6 +193,7 @@ public class ProviderGrpcService extends ProviderServiceGrpc.ProviderServiceImpl
 
             // Build pacs.008 message
             String xml = pacs008Builder.build(transferRequest);
+            originalMessageId = NpsXml.text(NpsXml.parse(xml), "BizMsg/Document/FIToFICstmrCdtTrf/GrpHdr/MsgId");
 
             // Send to NPS
             NpsResponse npsResponse = npsClient.sendCreditTransfer(xml);
@@ -215,41 +203,31 @@ public class ProviderGrpcService extends ProviderServiceGrpc.ProviderServiceImpl
             transactionLogger.logBankTransfer(ref, creditorAccount, creditorBankCode, amount, npsResponse, durationMs);
 
             if (!npsResponse.isSuccess()) {
-                // Connection/timeout errors should return pending
-                if (npsResponse.getHttpStatus() == 0 || npsResponse.getHttpStatus() >= 500) {
-                    return ProviderResponse.pendingWithReference(
-                            "Provider connection error - requery required",
-                            npsResponse.getMessageId(),
-                            ref);
-                }
-                return ProviderResponse.failed(
-                        npsResponse.getErrorMessage() != null ? npsResponse.getErrorMessage() : "Transfer failed",
-                        ref);
+                // Transport or authenticity failure is not a verified payment rejection.
+                return ProviderResponse.pendingWithReference("No verified payment status - reconciliation required",
+                        originalMessageId, ref);
             }
 
             // Parse pacs.002 response
-            PaymentStatusResponse statusResponse = responseParser.parsePaymentStatusResponse(
-                    npsResponse.getDecryptedResponse());
+            PaymentStatusResponse statusResponse = responseParser
+                    .parsePaymentStatusResponse(npsResponse.getDecryptedResponse());
 
             ProviderResponse resp;
             if (statusResponse.isSuccess()) {
-                resp = ProviderResponse.success(
-                        statusResponse.getReasonDescription() != null ? 
-                                statusResponse.getReasonDescription() : "Transfer successful",
-                        statusResponse.getMessageId(),
-                        ref);
+                resp = ProviderResponse.success(statusResponse.getReasonDescription() != null
+                        ? statusResponse.getReasonDescription()
+                        : "Transfer successful", originalMessageId, ref);
             } else if (statusResponse.isPending()) {
-                resp = ProviderResponse.pendingWithReference(
-                        statusResponse.getReasonDescription() != null ? 
-                                statusResponse.getReasonDescription() : "Transaction pending",
-                        statusResponse.getMessageId(),
-                        ref);
+                resp = ProviderResponse.pendingWithReference(statusResponse.getReasonDescription() != null
+                        ? statusResponse.getReasonDescription()
+                        : "Transaction pending", originalMessageId, ref);
+            } else if (statusResponse.isRejected()) {
+                resp = ProviderResponse.failedWithCode(statusResponse.getReasonDescription() != null
+                        ? statusResponse.getReasonDescription()
+                        : "Transfer rejected", statusResponse.getReasonCode(), ref);
             } else {
-                resp = ProviderResponse.failedWithCode(
-                        statusResponse.getReasonDescription() != null ? 
-                                statusResponse.getReasonDescription() : "Transfer rejected",
-                        statusResponse.getReasonCode(),
-                        ref);
+                resp = ProviderResponse.pendingWithReference("Unrecognized payment status - reconciliation required",
+                        originalMessageId, ref);
             }
 
             resp.requestXml = npsResponse.getRawRequest();
@@ -259,13 +237,13 @@ public class ProviderGrpcService extends ProviderServiceGrpc.ProviderServiceImpl
         } catch (Exception e) {
             Log.error("Bank transfer failed", e);
             transactionLogger.logClientEvent(ref, "bank-transfer", "ERROR", e.getMessage());
-            return ProviderResponse.pending("Transfer error: " + e.getMessage(), ref);
+            return ProviderResponse.pendingWithReference("Transfer error - requery required", originalMessageId, ref);
         }
     }
 
     /**
-     * Transaction status requery via pacs.028.
-     * Required metadata: original_msg_id OR original_end_to_end_id
+     * Transaction status requery via pacs.028. Required metadata: original_msg_id
+     * OR original_end_to_end_id
      */
     private ProviderResponse handleRequery(ProviderExecuteRequest request) {
         String ref = request.getReference();
@@ -273,56 +251,43 @@ public class ProviderGrpcService extends ProviderServiceGrpc.ProviderServiceImpl
 
         try {
             String originalMsgId = request.getMetadataOrDefault("original_msg_id", "");
-            String originalEndToEndId = request.getMetadataOrDefault("original_end_to_end_id", ref);
+            String originalEndToEndId = request.getMetadataOrDefault("original_end_to_end_id", "");
 
             if (originalMsgId.isBlank() && originalEndToEndId.isBlank()) {
-                return ProviderResponse.failed(
-                        "Missing required metadata: original_msg_id or original_end_to_end_id", ref);
+                return ProviderResponse.failed("Missing required metadata: original_msg_id or original_end_to_end_id",
+                        ref);
             }
 
             // Build pacs.028 message
-            String xml = pacs028Builder.build(
-                    originalMsgId.isBlank() ? originalEndToEndId : originalMsgId,
-                    originalEndToEndId);
+            String xml = pacs028Builder.build(originalMsgId, originalEndToEndId);
 
             // Send to NPS
             NpsResponse npsResponse = npsClient.sendPaymentStatusRequest(xml);
             long durationMs = System.currentTimeMillis() - startTime;
 
             // Log to Kafka
-            transactionLogger.logRequery(ref, originalMsgId.isBlank() ? originalEndToEndId : originalMsgId, 
-                    npsResponse, durationMs);
+            transactionLogger.logRequery(ref, originalMsgId.isBlank() ? originalEndToEndId : originalMsgId, npsResponse,
+                    durationMs);
 
             if (!npsResponse.isSuccess()) {
-                return ProviderResponse.pending(
-                        "Requery failed: " + (npsResponse.getErrorMessage() != null ? 
-                                npsResponse.getErrorMessage() : "Unknown error"),
+                return ProviderResponse.pending("Requery failed: "
+                        + (npsResponse.getErrorMessage() != null ? npsResponse.getErrorMessage() : "Unknown error"),
                         ref);
             }
 
             // Parse pacs.002 response
-            PaymentStatusResponse statusResponse = responseParser.parsePaymentStatusResponse(
-                    npsResponse.getDecryptedResponse());
+            PaymentStatusResponse statusResponse = responseParser
+                    .parsePaymentStatusResponse(npsResponse.getDecryptedResponse());
 
-            ProviderResponse resp;
-            if (statusResponse.isSuccess()) {
-                resp = ProviderResponse.success(
-                        "Transaction successful",
-                        statusResponse.getMessageId(),
-                        ref);
-            } else if (statusResponse.isPending()) {
-                resp = ProviderResponse.pendingWithReference(
-                        statusResponse.getReasonDescription() != null ? 
-                                statusResponse.getReasonDescription() : "Transaction still pending",
-                        statusResponse.getMessageId(),
-                        ref);
-            } else {
-                resp = ProviderResponse.failedWithCode(
-                        statusResponse.getReasonDescription() != null ? 
-                                statusResponse.getReasonDescription() : "Transaction failed",
-                        statusResponse.getReasonCode(),
-                        ref);
-            }
+            // A status query is informational; it cannot establish payment finality.
+            ProviderResponse resp = ProviderResponse.pendingWithReference(
+                    "Queried status: " + nullSafe(statusResponse.getTransactionStatus())
+                            + " - finality requires NPS authorization or settlement reconciliation",
+                    originalMsgId.isBlank() ? originalEndToEndId : originalMsgId, ref);
+            resp.responseCode = statusResponse.getTransactionStatus();
+            resp.dataJson = objectMapper.writeValueAsString(java.util.Map.of("queriedStatus",
+                    nullSafe(statusResponse.getTransactionStatus()), "originalMessageId",
+                    nullSafe(statusResponse.getOriginalMessageId()), "finalityConfirmed", false));
 
             resp.requestXml = npsResponse.getRawRequest();
             resp.responseXml = npsResponse.getRawResponse();
@@ -342,12 +307,7 @@ public class ProviderGrpcService extends ProviderServiceGrpc.ProviderServiceImpl
     /**
      * Data class for name enquiry response JSON.
      */
-    public record NameEnquiryData(
-            String accountName,
-            String accountNumber,
-            String bvn,
-            String bankCode,
-            String sessionId,
-            String messageId) {
+    public record NameEnquiryData(String accountName, String accountNumber, String bvn, String bankCode,
+            String sessionId, String messageId) {
     }
 }

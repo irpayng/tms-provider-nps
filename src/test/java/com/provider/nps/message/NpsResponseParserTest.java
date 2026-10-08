@@ -2,19 +2,52 @@ package com.provider.nps.message;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import org.junit.jupiter.api.Test;
-
 import com.provider.nps.message.NpsResponseParser.NameEnquiryResponse;
 import com.provider.nps.message.NpsResponseParser.PaymentStatusResponse;
+import org.junit.jupiter.api.Test;
 
-import io.quarkus.test.junit.QuarkusTest;
-import jakarta.inject.Inject;
-
-@QuarkusTest
 class NpsResponseParserTest {
 
-    @Inject
-    NpsResponseParser parser;
+    NpsResponseParser parser = new NpsResponseParser();
+
+    @Test
+    void negativeVerificationCannotSucceedBecauseANameIsPresent() {
+        String xml = """
+                <BizMsg><Document><IdVrfctnRpt><Rpt>
+                    <Vrfctn>false</Vrfctn>
+                    <UpdtdPtyAndAcctId><Pty><Nm>Known Name</Nm></Pty>
+                        <Acct><Id><Othr><Id>0123456789</Id></Othr></Id></Acct>
+                    </UpdtdPtyAndAcctId>
+                </Rpt></IdVrfctnRpt></Document></BizMsg>
+                """;
+        assertFalse(parser.parseNameEnquiryResponse(xml).isSuccess());
+    }
+
+    @Test
+    void accountNumberDoesNotResolveToBvn() {
+        String xml = """
+                <BizMsg><Document><IdVrfctnRpt><Rpt><Vrfctn>true</Vrfctn>
+                    <UpdtdPtyAndAcctId>
+                        <Pty><Nm>Known Name</Nm><Id><PrvtId><Othr><Id>22123456789</Id>
+                            <SchmeNm><Prtry>BVN</Prtry></SchmeNm>
+                        </Othr></PrvtId></Id></Pty>
+                        <Acct><Id><Othr><Id>0123456789</Id></Othr></Id></Acct>
+                    </UpdtdPtyAndAcctId>
+                </Rpt></IdVrfctnRpt></Document></BizMsg>
+                """;
+        var response = parser.parseNameEnquiryResponse(xml);
+        assertEquals("0123456789", response.getAccountNumber());
+        assertEquals("22123456789", response.getBvn());
+    }
+
+    @Test
+    void technicalAcceptanceIsPending() {
+        String xml = "<BizMsg><Document><FIToFIPmtStsRpt><TxInfAndSts><TxSts>ACTC</TxSts>"
+                + "</TxInfAndSts></FIToFIPmtStsRpt></Document></BizMsg>";
+        var response = parser.parsePaymentStatusResponse(xml);
+        assertFalse(response.isSuccess());
+        assertTrue(response.isPending());
+    }
 
     @Test
     void testParseNameEnquirySuccessResponse() {
@@ -66,7 +99,7 @@ class NpsResponseParserTest {
                             </OrgnlGrpInfAndSts>
                             <TxInfAndSts>
                                 <OrgnlEndToEndId>E2E123</OrgnlEndToEndId>
-                                <TxSts>ACTC</TxSts>
+                                <TxSts>ACSP</TxSts>
                             </TxInfAndSts>
                         </FIToFIPmtStsRpt>
                     </Document>
@@ -76,7 +109,7 @@ class NpsResponseParserTest {
         PaymentStatusResponse response = parser.parsePaymentStatusResponse(xml);
 
         assertTrue(response.isSuccess());
-        assertEquals("ACTC", response.getTransactionStatus());
+        assertEquals("ACSP", response.getTransactionStatus());
         assertEquals("ORIGINAL123", response.getOriginalMessageId());
         assertEquals("E2E123", response.getEndToEndId());
         assertFalse(response.isPending());

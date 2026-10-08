@@ -3,14 +3,13 @@ package com.provider.nps.callback;
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
 
+import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import io.quarkus.test.junit.QuarkusTest;
-
 /**
- * Tests for NPS callback endpoints.
- * These endpoints receive notifications from NIBSS NPS.
+ * Tests for NPS callback endpoints. These endpoints receive notifications from
+ * NIBSS NPS.
  */
 @QuarkusTest
 class CallbackEndpointTest {
@@ -57,14 +56,8 @@ class CallbackEndpointTest {
                 </BizMsg>
                 """;
 
-        given()
-                .contentType("application/xml")
-                .body(inboundTransfer)
-                .when()
-                .post("/nps/callback/pacs008")
-                .then()
-                .statusCode(200)
-                .contentType(containsString("xml"));
+        given().contentType("application/xml").body(inboundTransfer).when().post("/nps/callback/pacs008").then()
+                .statusCode(200).contentType(containsString("xml"));
     }
 
     @Test
@@ -91,12 +84,7 @@ class CallbackEndpointTest {
                 </BizMsg>
                 """;
 
-        given()
-                .contentType("application/xml")
-                .body(statusNotification)
-                .when()
-                .post("/nps/callback/pacs002")
-                .then()
+        given().contentType("application/xml").body(statusNotification).when().post("/nps/callback/pacs002").then()
                 .statusCode(200);
     }
 
@@ -137,14 +125,8 @@ class CallbackEndpointTest {
                 </BizMsg>
                 """;
 
-        given()
-                .contentType("application/xml")
-                .body(nameEnquiry)
-                .when()
-                .post("/nps/callback/acmt023")
-                .then()
-                .statusCode(200)
-                .contentType(containsString("xml"));
+        given().contentType("application/xml").body(nameEnquiry).when().post("/nps/callback/acmt023").then()
+                .statusCode(200).contentType(containsString("xml"));
     }
 
     @Test
@@ -171,12 +153,7 @@ class CallbackEndpointTest {
                 </BizMsg>
                 """;
 
-        given()
-                .contentType("application/xml")
-                .body(nameEnquiryResponse)
-                .when()
-                .post("/nps/callback/acmt024")
-                .then()
+        given().contentType("application/xml").body(nameEnquiryResponse).when().post("/nps/callback/acmt024").then()
                 .statusCode(200);
     }
 
@@ -205,12 +182,7 @@ class CallbackEndpointTest {
                 </BizMsg>
                 """;
 
-        given()
-                .contentType("application/xml")
-                .body(painStatus)
-                .when()
-                .post("/nps/callback/pain002")
-                .then()
+        given().contentType("application/xml").body(painStatus).when().post("/nps/callback/pain002").then()
                 .statusCode(200);
     }
 }

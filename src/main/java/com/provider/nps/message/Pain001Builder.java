@@ -1,14 +1,13 @@
 package com.provider.nps.message;
 
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 
-import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
-
 /**
- * Builder for pain.001.001.09 - CustomerCreditTransferInitiation.
- * Used for customer-initiated payment instructions.
+ * Builder for pain.001.001.09 - CustomerCreditTransferInitiation. Used for
+ * customer-initiated payment instructions.
  * 
  * This is an alternative to pacs.008 for customer-to-FI initiated transfers.
  */
@@ -26,8 +25,9 @@ public class Pain001Builder {
     public String build(PaymentInitiationRequest request) {
         String msgId = baseBuilder.getIdGenerator().generateMessageId();
         String pmtInfId = baseBuilder.getIdGenerator().generateMessageId();
-        String endToEndId = request.getEndToEndId() != null ? 
-                request.getEndToEndId() : baseBuilder.getIdGenerator().generateEndToEndId();
+        String endToEndId = request.getEndToEndId() != null
+                ? request.getEndToEndId()
+                : baseBuilder.getIdGenerator().generateEndToEndId();
         String creDate = baseBuilder.getIdGenerator().currentTimestamp();
         String reqExecDate = baseBuilder.getIdGenerator().currentDate();
 
@@ -38,8 +38,8 @@ public class Pain001Builder {
         return baseBuilder.wrapInBizMsg(appHdr, document);
     }
 
-    private String buildDocument(String msgId, String pmtInfId, String endToEndId,
-            String creDate, String reqExecDate, PaymentInitiationRequest request) {
+    private String buildDocument(String msgId, String pmtInfId, String endToEndId, String creDate, String reqExecDate,
+            PaymentInitiationRequest request) {
 
         String formattedAmount = formatAmount(request.getAmount());
 
@@ -152,25 +152,11 @@ public class Pain001Builder {
                             </Envlp>
                         </SplmtryData>
                     </CstmrCdtTrfInitn>
-                </Document>""",
-                NpsMessageBuilder.PAIN_001_NS,
-                msgId,
-                creDate,
-                formattedAmount,
-                baseBuilder.getSourceName(),
-                baseBuilder.getSourceId(),
-                pmtInfId,
-                formattedAmount,
-                reqExecDate,
-                request.getDebtorName(),
-                request.getDebtorBvn() != null ? request.getDebtorBvn() : "",
-                request.getDebtorAccount(),
-                baseBuilder.getSourceBic(),
-                endToEndId,
-                formattedAmount,
-                request.getCreditorBankCode(),
-                request.getCreditorName(),
-                request.getCreditorAccount(),
+                </Document>""", NpsMessageBuilder.PAIN_001_NS, msgId, creDate, formattedAmount,
+                baseBuilder.getSourceName(), baseBuilder.getSourceId(), pmtInfId, formattedAmount, reqExecDate,
+                request.getDebtorName(), request.getDebtorBvn() != null ? request.getDebtorBvn() : "",
+                request.getDebtorAccount(), baseBuilder.getSourceBic(), endToEndId, formattedAmount,
+                request.getCreditorBankCode(), request.getCreditorName(), request.getCreditorAccount(),
                 request.getPurposeCode() != null ? request.getPurposeCode() : "OTHR",
                 escapeXml(request.getNarration() != null ? request.getNarration() : "Fund Transfer"),
                 request.getChannelCode() != null ? request.getChannelCode() : "1",
@@ -182,12 +168,10 @@ public class Pain001Builder {
     }
 
     private String escapeXml(String text) {
-        if (text == null) return "";
-        return text.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("\"", "&quot;")
-                .replace("'", "&apos;");
+        if (text == null)
+            return "";
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'",
+                "&apos;");
     }
 
     /**
@@ -208,40 +192,88 @@ public class Pain001Builder {
         private String purposeCode;
 
         // Getters and Setters
-        public String getEndToEndId() { return endToEndId; }
-        public void setEndToEndId(String endToEndId) { this.endToEndId = endToEndId; }
+        public String getEndToEndId() {
+            return endToEndId;
+        }
+        public void setEndToEndId(String endToEndId) {
+            this.endToEndId = endToEndId;
+        }
 
-        public BigDecimal getAmount() { return amount; }
-        public void setAmount(BigDecimal amount) { this.amount = amount; }
+        public BigDecimal getAmount() {
+            return amount;
+        }
+        public void setAmount(BigDecimal amount) {
+            this.amount = amount;
+        }
 
-        public String getDebtorName() { return debtorName; }
-        public void setDebtorName(String debtorName) { this.debtorName = debtorName; }
+        public String getDebtorName() {
+            return debtorName;
+        }
+        public void setDebtorName(String debtorName) {
+            this.debtorName = debtorName;
+        }
 
-        public String getDebtorAccount() { return debtorAccount; }
-        public void setDebtorAccount(String debtorAccount) { this.debtorAccount = debtorAccount; }
+        public String getDebtorAccount() {
+            return debtorAccount;
+        }
+        public void setDebtorAccount(String debtorAccount) {
+            this.debtorAccount = debtorAccount;
+        }
 
-        public String getDebtorBvn() { return debtorBvn; }
-        public void setDebtorBvn(String debtorBvn) { this.debtorBvn = debtorBvn; }
+        public String getDebtorBvn() {
+            return debtorBvn;
+        }
+        public void setDebtorBvn(String debtorBvn) {
+            this.debtorBvn = debtorBvn;
+        }
 
-        public String getCreditorName() { return creditorName; }
-        public void setCreditorName(String creditorName) { this.creditorName = creditorName; }
+        public String getCreditorName() {
+            return creditorName;
+        }
+        public void setCreditorName(String creditorName) {
+            this.creditorName = creditorName;
+        }
 
-        public String getCreditorAccount() { return creditorAccount; }
-        public void setCreditorAccount(String creditorAccount) { this.creditorAccount = creditorAccount; }
+        public String getCreditorAccount() {
+            return creditorAccount;
+        }
+        public void setCreditorAccount(String creditorAccount) {
+            this.creditorAccount = creditorAccount;
+        }
 
-        public String getCreditorBankCode() { return creditorBankCode; }
-        public void setCreditorBankCode(String creditorBankCode) { this.creditorBankCode = creditorBankCode; }
+        public String getCreditorBankCode() {
+            return creditorBankCode;
+        }
+        public void setCreditorBankCode(String creditorBankCode) {
+            this.creditorBankCode = creditorBankCode;
+        }
 
-        public String getNarration() { return narration; }
-        public void setNarration(String narration) { this.narration = narration; }
+        public String getNarration() {
+            return narration;
+        }
+        public void setNarration(String narration) {
+            this.narration = narration;
+        }
 
-        public String getChannelCode() { return channelCode; }
-        public void setChannelCode(String channelCode) { this.channelCode = channelCode; }
+        public String getChannelCode() {
+            return channelCode;
+        }
+        public void setChannelCode(String channelCode) {
+            this.channelCode = channelCode;
+        }
 
-        public String getKycLevel() { return kycLevel; }
-        public void setKycLevel(String kycLevel) { this.kycLevel = kycLevel; }
+        public String getKycLevel() {
+            return kycLevel;
+        }
+        public void setKycLevel(String kycLevel) {
+            this.kycLevel = kycLevel;
+        }
 
-        public String getPurposeCode() { return purposeCode; }
-        public void setPurposeCode(String purposeCode) { this.purposeCode = purposeCode; }
+        public String getPurposeCode() {
+            return purposeCode;
+        }
+        public void setPurposeCode(String purposeCode) {
+            this.purposeCode = purposeCode;
+        }
     }
 }

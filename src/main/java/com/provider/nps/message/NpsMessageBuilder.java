@@ -1,15 +1,13 @@
 package com.provider.nps.message;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
-
 import com.provider.nps.crypto.NpsIdGenerator;
-
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Base class for NPS ISO 20022 message builders.
- * Provides common header building functionality.
+ * Base class for NPS ISO 20022 message builders. Provides common header
+ * building functionality.
  */
 @ApplicationScoped
 public class NpsMessageBuilder {
@@ -35,9 +33,12 @@ public class NpsMessageBuilder {
     /**
      * Builds the ISO 20022 Business Application Header (AppHdr).
      * 
-     * @param msgDefIdr Message definition identifier (e.g., "acmt.023.001.03")
-     * @param bizMsgIdr Business message identifier
-     * @param toBic Destination BIC
+     * @param msgDefIdr
+     *            Message definition identifier (e.g., "acmt.023.001.03")
+     * @param bizMsgIdr
+     *            Business message identifier
+     * @param toBic
+     *            Destination BIC
      * @return AppHdr XML fragment
      */
     protected String buildAppHdr(String msgDefIdr, String bizMsgIdr, String toBic) {
@@ -62,8 +63,7 @@ public class NpsMessageBuilder {
                     <BizMsgIdr>%s</BizMsgIdr>
                     <MsgDefIdr>%s</MsgDefIdr>
                     <CreDt>%s</CreDt>
-                </AppHdr>""",
-                HEAD_NS, sourceBic, toBic, bizMsgIdr, msgDefIdr, creDate);
+                </AppHdr>""", HEAD_NS, sourceBic, toBic, bizMsgIdr, msgDefIdr, creDate);
     }
 
     /**

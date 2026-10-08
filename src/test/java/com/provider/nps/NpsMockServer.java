@@ -1,13 +1,11 @@
 package com.provider.nps;
 
-import java.util.HashMap;
-import java.util.Map;
-
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.client.WireMock;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
-
 import io.quarkus.test.common.QuarkusTestResourceLifecycleManager;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * WireMock server that simulates NIBSS NPS endpoints for testing.
@@ -45,17 +43,14 @@ public class NpsMockServer implements QuarkusTestResourceLifecycleManager {
 
     private void setupTokenEndpoint() {
         // OAuth2 token response
-        wireMockServer.stubFor(WireMock.post(WireMock.urlEqualTo("/token"))
-                .willReturn(WireMock.aResponse()
-                        .withStatus(200)
-                        .withHeader("Content-Type", "application/json")
-                        .withBody("""
-                                {
-                                    "access_token": "test-token-12345",
-                                    "token_type": "Bearer",
-                                    "expires_in": 3600
-                                }
-                                """)));
+        wireMockServer.stubFor(WireMock.post(WireMock.urlEqualTo("/token")).willReturn(
+                WireMock.aResponse().withStatus(200).withHeader("Content-Type", "application/json").withBody("""
+                        {
+                            "access_token": "test-token-12345",
+                            "token_type": "Bearer",
+                            "expires_in": 3600
+                        }
+                        """)));
     }
 
     private void setupNameEnquiryEndpoint() {
@@ -121,11 +116,8 @@ public class NpsMockServer implements QuarkusTestResourceLifecycleManager {
                 </BizMsg>
                 """;
 
-        wireMockServer.stubFor(WireMock.post(WireMock.urlEqualTo("/nps/acmt/023"))
-                .willReturn(WireMock.aResponse()
-                        .withStatus(200)
-                        .withHeader("Content-Type", "application/xml")
-                        .withBody(successResponse)));
+        wireMockServer.stubFor(WireMock.post(WireMock.urlEqualTo("/nps/acmt/023")).willReturn(WireMock.aResponse()
+                .withStatus(200).withHeader("Content-Type", "application/xml").withBody(successResponse)));
     }
 
     private void setupCreditTransferEndpoint() {
@@ -151,7 +143,7 @@ public class NpsMockServer implements QuarkusTestResourceLifecycleManager {
                             <TxInfAndSts>
                                 <OrgnlEndToEndId>E2E123456789</OrgnlEndToEndId>
                                 <OrgnlTxId>TX123456789</OrgnlTxId>
-                                <TxSts>ACTC</TxSts>
+                                <TxSts>ACSP</TxSts>
                                 <StsRsnInf>
                                     <AddtlInf>Transaction successful</AddtlInf>
                                 </StsRsnInf>
@@ -166,11 +158,8 @@ public class NpsMockServer implements QuarkusTestResourceLifecycleManager {
                 </BizMsg>
                 """;
 
-        wireMockServer.stubFor(WireMock.post(WireMock.urlEqualTo("/nps/pacs/008"))
-                .willReturn(WireMock.aResponse()
-                        .withStatus(200)
-                        .withHeader("Content-Type", "application/xml")
-                        .withBody(successResponse)));
+        wireMockServer.stubFor(WireMock.post(WireMock.urlEqualTo("/nps/pacs/008")).willReturn(WireMock.aResponse()
+                .withStatus(200).withHeader("Content-Type", "application/xml").withBody(successResponse)));
     }
 
     private void setupPaymentStatusEndpoint() {
@@ -205,11 +194,8 @@ public class NpsMockServer implements QuarkusTestResourceLifecycleManager {
                 </BizMsg>
                 """;
 
-        wireMockServer.stubFor(WireMock.post(WireMock.urlEqualTo("/nps/pacs/028"))
-                .willReturn(WireMock.aResponse()
-                        .withStatus(200)
-                        .withHeader("Content-Type", "application/xml")
-                        .withBody(successResponse)));
+        wireMockServer.stubFor(WireMock.post(WireMock.urlEqualTo("/nps/pacs/028")).willReturn(WireMock.aResponse()
+                .withStatus(200).withHeader("Content-Type", "application/xml").withBody(successResponse)));
     }
 
     @Override

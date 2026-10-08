@@ -1,21 +1,18 @@
 package com.provider.nps.crypto;
 
+import jakarta.enterprise.context.ApplicationScoped;
 import java.security.SecureRandom;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
-
 import org.eclipse.microprofile.config.inject.ConfigProperty;
-
-import jakarta.enterprise.context.ApplicationScoped;
 
 /**
  * NPS ID and timestamp generator.
  * 
- * Per NPS spec:
- * - Message ID (MsgId): 35 characters = sourceID (12) + yyyyMMddHHmmss (14) + random (9)
- * - End-to-End ID: Same format as MsgId
- * - All timestamps in WAT (West Africa Time, UTC+1)
+ * Per NPS spec: - Message ID (MsgId): 35 characters = sourceID (12) +
+ * yyyyMMddHHmmss (14) + random (9) - End-to-End ID: Same format as MsgId - All
+ * timestamps in WAT (West Africa Time, UTC+1)
  */
 @ApplicationScoped
 public class NpsIdGenerator {
@@ -29,8 +26,8 @@ public class NpsIdGenerator {
     String sourceId;
 
     /**
-     * Generates a 35-character NPS message ID.
-     * Format: sourceID (12) + yyyyMMddHHmmss (14) + random (9)
+     * Generates a 35-character NPS message ID. Format: sourceID (12) +
+     * yyyyMMddHHmmss (14) + random (9)
      */
     public String generateMessageId() {
         String paddedSourceId = padOrTruncate(sourceId, 12);

@@ -1,20 +1,17 @@
 package com.provider.nps.crypto;
 
-import java.io.FileInputStream;
+import com.provider.nps.xml.NpsXml;
+import io.quarkus.logging.Log;
+import jakarta.annotation.PostConstruct;
+import jakarta.enterprise.context.ApplicationScoped;
 import java.io.StringReader;
 import java.io.StringWriter;
-import java.security.KeyFactory;
 import java.security.PrivateKey;
 import java.security.PublicKey;
-import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
-import java.security.spec.PKCS8EncodedKeySpec;
-import java.security.spec.X509EncodedKeySpec;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
-
 import javax.xml.crypto.dsig.CanonicalizationMethod;
 import javax.xml.crypto.dsig.DigestMethod;
 import javax.xml.crypto.dsig.Reference;
@@ -37,20 +34,15 @@ import javax.xml.transform.Transformer;
 import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
-
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 import org.xml.sax.InputSource;
 
-import io.quarkus.logging.Log;
-import jakarta.annotation.PostConstruct;
-import jakarta.enterprise.context.ApplicationScoped;
-
 /**
- * NPS XML Digital Signature utility.
- * Implements W3C XMLDSIG with RSA-SHA256 as per NPS integration spec.
+ * NPS XML Digital Signature utility. Implements W3C XMLDSIG with RSA-SHA256 as
+ * per NPS integration spec.
  * 
  * Signature is enveloped within the AppHdr/Sgntr element.
  */
@@ -76,8 +68,7 @@ public class NpsXmlSigner {
     void init() {
         try {
             signatureFactory = XMLSignatureFactory.getInstance("DOM");
-            documentBuilderFactory = DocumentBuilderFactory.newInstance();
-            documentBuilderFactory.setNamespaceAware(true);
+            documentBuilderFactory = NpsXml.newDocumentBuilderFactory();
 
             loadKeys();
             Log.info("NpsXmlSigner initialized successfully");
@@ -89,55 +80,21 @@ public class NpsXmlSigner {
 
     private void loadKeys() throws Exception {
         // Load private key (PEM format)
-        privateKey = loadPrivateKey(privateKeyPath);
+        privateKey = NpsPemKeys.privateKey(privateKeyPath);
 
         // Load certificate (PEM format)
-        certificate = loadCertificate(certificatePath);
+        certificate = NpsPemKeys.certificate(certificatePath);
 
         // Load NIBSS public key for signature verification
-        nibssPublicKey = loadPublicKey(nibssPublicKeyPath);
-    }
-
-    private PrivateKey loadPrivateKey(String path) throws Exception {
-        String pem = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(path)));
-        String base64 = pem
-                .replace("-----BEGIN PRIVATE KEY-----", "")
-                .replace("-----END PRIVATE KEY-----", "")
-                .replace("-----BEGIN RSA PRIVATE KEY-----", "")
-                .replace("-----END RSA PRIVATE KEY-----", "")
-                .replaceAll("\\s", "");
-
-        byte[] keyBytes = Base64.getDecoder().decode(base64);
-        PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(keyBytes);
-        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
-        return keyFactory.generatePrivate(keySpec);
-    }
-
-    private PublicKey loadPublicKey(String path) throws Exception {
-        String pem = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(path)));
-        String base64 = pem
-                .replace("-----BEGIN PUBLIC KEY-----", "")
-                .replace("-----END PUBLIC KEY-----", "")
-                .replaceAll("\\s", "");
-
-        byte[] keyBytes = Base64.getDecoder().decode(base64);
-        X509EncodedKeySpec keySpec = new X509EncodedKeySpec(keyBytes);
-        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
-        return keyFactory.generatePublic(keySpec);
-    }
-
-    private X509Certificate loadCertificate(String path) throws Exception {
-        try (FileInputStream fis = new FileInputStream(path)) {
-            CertificateFactory cf = CertificateFactory.getInstance("X.509");
-            return (X509Certificate) cf.generateCertificate(fis);
-        }
+        nibssPublicKey = NpsPemKeys.publicKey(nibssPublicKeyPath);
     }
 
     /**
-     * Signs an ISO 20022 XML message with enveloped W3C XMLDSIG signature.
-     * The signature is placed in AppHdr/Sgntr as per NPS spec.
+     * Signs an ISO 20022 XML message with enveloped W3C XMLDSIG signature. The
+     * signature is placed in AppHdr/Sgntr as per NPS spec.
      * 
-     * @param xml The unsigned XML message
+     * @param xml
+     *            The unsigned XML message
      * @return The signed XML message
      */
     public String sign(String xml) throws Exception {
@@ -159,16 +116,13 @@ public class NpsXmlSigner {
         transforms.add(signatureFactory.newTransform(Transform.ENVELOPED, (TransformParameterSpec) null));
         transforms.add(signatureFactory.newTransform(CanonicalizationMethod.EXCLUSIVE, (TransformParameterSpec) null));
 
-        Reference reference = signatureFactory.newReference(
-                "", // Empty URI means sign entire document
-                signatureFactory.newDigestMethod(DigestMethod.SHA256, null),
-                transforms,
-                null,
-                null);
+        Reference reference = signatureFactory.newReference("", // Empty URI means sign entire document
+                signatureFactory.newDigestMethod(DigestMethod.SHA256, null), transforms, null, null);
 
         // Create SignedInfo with RSA-SHA256
         SignedInfo signedInfo = signatureFactory.newSignedInfo(
-                signatureFactory.newCanonicalizationMethod(CanonicalizationMethod.EXCLUSIVE, (C14NMethodParameterSpec) null),
+                signatureFactory.newCanonicalizationMethod(CanonicalizationMethod.EXCLUSIVE,
+                        (C14NMethodParameterSpec) null),
                 signatureFactory.newSignatureMethod(SignatureMethod.RSA_SHA256, null),
                 Collections.singletonList(reference));
 
@@ -204,7 +158,8 @@ public class NpsXmlSigner {
     /**
      * Verifies the signature on an incoming NPS XML message.
      * 
-     * @param xml The signed XML message
+     * @param xml
+     *            The signed XML message
      * @return true if signature is valid
      */
     public boolean verify(String xml) throws Exception {

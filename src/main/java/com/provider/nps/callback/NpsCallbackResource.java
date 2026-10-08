@@ -3,10 +3,10 @@ package com.provider.nps.callback;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.provider.nps.crypto.NpsXmlEncryptor;
 import com.provider.nps.crypto.NpsXmlSigner;
+import com.provider.nps.message.NpsInboundParser;
 import com.provider.nps.message.NpsResponseParser;
 import com.provider.nps.message.NpsResponseParser.NameEnquiryResponse;
 import com.provider.nps.message.NpsResponseParser.PaymentStatusResponse;
-
 import io.quarkus.logging.Log;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
@@ -15,16 +15,14 @@ import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
-
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
  * REST endpoints for inbound NPS callbacks.
  * 
- * NPS sends us messages when:
- * - Inbound credit transfer (pacs.008) - we receive funds
- * - Payment status notification (pacs.002)
- * - Name enquiry request (acmt.023) - another FI queries our account
+ * NPS sends us messages when: - Inbound credit transfer (pacs.008) - we receive
+ * funds - Payment status notification (pacs.002) - Name enquiry request
+ * (acmt.023) - another FI queries our account
  * 
  * All messages are signed and encrypted by NIBSS.
  */
@@ -50,9 +48,12 @@ public class NpsCallbackResource {
     @Inject
     NpsCallbackHandler callbackHandler;
 
+    @Inject
+    NpsInboundParser inboundParser;
+
     /**
-     * Callback for inbound credit transfer (pacs.008).
-     * NPS sends this when another bank initiates a transfer TO us.
+     * Callback for inbound credit transfer (pacs.008). NPS sends this when another
+     * bank initiates a transfer TO us.
      */
     @POST
     @Path("/pacs008")
@@ -71,13 +72,12 @@ public class NpsCallbackResource {
                 if (!signatureValid) {
                     Log.warn("Invalid signature on inbound pacs.008");
                     return Response.status(Response.Status.BAD_REQUEST)
-                            .entity(buildErrorResponse("RJCT", "Invalid signature"))
-                            .build();
+                            .entity(buildErrorResponse("RJCT", "Invalid signature")).build();
                 }
             }
 
             // Parse the credit transfer
-            InboundCreditTransfer transfer = parseInboundCreditTransfer(decryptedXml);
+            InboundCreditTransfer transfer = inboundParser.parseCreditTransfer(decryptedXml);
 
             // Process the inbound transfer (credit beneficiary account)
             CallbackResult result = callbackHandler.handleInboundCreditTransfer(transfer);
@@ -94,22 +94,20 @@ public class NpsCallbackResource {
                 finalResponse = xmlEncryptor.encrypt(signedResponse);
             }
 
-            Log.infof("Processed inbound pacs.008: msgId=%s, status=%s", 
-                    transfer.getMessageId(), result.getStatus());
+            Log.infof("Processed inbound pacs.008: msgId=%s, status=%s", transfer.getMessageId(), result.getStatus());
 
             return Response.ok(finalResponse).build();
 
         } catch (Exception e) {
             Log.error("Failed to process inbound pacs.008", e);
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity(buildErrorResponse("RJCT", "Processing error"))
-                    .build();
+                    .entity(buildErrorResponse("RJCT", "Processing error")).build();
         }
     }
 
     /**
-     * Callback for payment status notification (pacs.002).
-     * NPS sends this for async status updates on our outbound transfers.
+     * Callback for payment status notification (pacs.002). NPS sends this for async
+     * status updates on our outbound transfers.
      */
     @POST
     @Path("/pacs002")
@@ -137,8 +135,8 @@ public class NpsCallbackResource {
             // Update transaction status in our system
             callbackHandler.handlePaymentStatusUpdate(status);
 
-            Log.infof("Processed pacs.002: originalMsgId=%s, status=%s", 
-                    status.getOriginalMessageId(), status.getTransactionStatus());
+            Log.infof("Processed pacs.002: originalMsgId=%s, status=%s", status.getOriginalMessageId(),
+                    status.getTransactionStatus());
 
             return Response.ok().build();
 
@@ -149,8 +147,8 @@ public class NpsCallbackResource {
     }
 
     /**
-     * Callback for inbound name enquiry (acmt.023).
-     * Another FI is querying one of our accounts.
+     * Callback for inbound name enquiry (acmt.023). Another FI is querying one of
+     * our accounts.
      */
     @POST
     @Path("/acmt023")
@@ -169,13 +167,12 @@ public class NpsCallbackResource {
                 if (!signatureValid) {
                     Log.warn("Invalid signature on inbound acmt.023");
                     return Response.status(Response.Status.BAD_REQUEST)
-                            .entity(buildErrorResponse("RJCT", "Invalid signature"))
-                            .build();
+                            .entity(buildErrorResponse("RJCT", "Invalid signature")).build();
                 }
             }
 
             // Parse the name enquiry request
-            InboundNameEnquiry enquiry = parseInboundNameEnquiry(decryptedXml);
+            InboundNameEnquiry enquiry = inboundParser.parseNameEnquiry(decryptedXml);
 
             // Look up account in our system
             CallbackResult result = callbackHandler.handleInboundNameEnquiry(enquiry);
@@ -192,22 +189,21 @@ public class NpsCallbackResource {
                 finalResponse = xmlEncryptor.encrypt(signedResponse);
             }
 
-            Log.infof("Processed inbound acmt.023: account=%s, found=%s", 
-                    enquiry.getAccountNumber(), result.isSuccess());
+            Log.infof("Processed inbound acmt.023: account=%s, found=%s", enquiry.getAccountNumber(),
+                    result.isSuccess());
 
             return Response.ok(finalResponse).build();
 
         } catch (Exception e) {
             Log.error("Failed to process inbound acmt.023", e);
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity(buildErrorResponse("RJCT", "Processing error"))
-                    .build();
+                    .entity(buildErrorResponse("RJCT", "Processing error")).build();
         }
     }
 
     /**
-     * Callback for name enquiry response (acmt.024).
-     * Async response to our outbound name enquiry.
+     * Callback for name enquiry response (acmt.024). Async response to our outbound
+     * name enquiry.
      */
     @POST
     @Path("/acmt024")
@@ -232,8 +228,8 @@ public class NpsCallbackResource {
             NameEnquiryResponse response = responseParser.parseNameEnquiryResponse(decryptedXml);
             callbackHandler.handleNameEnquiryResponse(response);
 
-            Log.infof("Processed acmt.024: msgId=%s, accountName=%s", 
-                    response.getMessageId(), response.getAccountName());
+            Log.infof("Processed acmt.024: msgId=%s, accountName=%s", response.getMessageId(),
+                    response.getAccountName());
 
             return Response.ok().build();
 
@@ -269,8 +265,8 @@ public class NpsCallbackResource {
             var response = responseParser.parsePaymentInitiationStatus(decryptedXml);
             callbackHandler.handlePaymentInitiationResponse(response);
 
-            Log.infof("Processed pain.002: msgId=%s, status=%s", 
-                    response.getMessageId(), response.getTransactionStatus());
+            Log.infof("Processed pain.002: msgId=%s, status=%s", response.getMessageId(),
+                    response.getTransactionStatus());
 
             return Response.ok().build();
 
@@ -278,121 +274,6 @@ public class NpsCallbackResource {
             Log.error("Failed to process pain.002 callback", e);
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR).build();
         }
-    }
-
-    // Helper methods for parsing inbound messages
-
-    private InboundCreditTransfer parseInboundCreditTransfer(String xml) {
-        InboundCreditTransfer transfer = new InboundCreditTransfer();
-        
-        transfer.setMessageId(extractValue(xml, "MsgId"));
-        transfer.setEndToEndId(extractValue(xml, "EndToEndId"));
-        transfer.setTransactionId(extractValue(xml, "TxId"));
-        transfer.setAmount(extractAmount(xml));
-        transfer.setDebtorName(extractDebtorName(xml));
-        transfer.setDebtorAccount(extractDebtorAccount(xml));
-        transfer.setDebtorBankCode(extractDebtorBankCode(xml));
-        transfer.setCreditorName(extractCreditorName(xml));
-        transfer.setCreditorAccount(extractCreditorAccount(xml));
-        transfer.setNarration(extractValue(xml, "Ustrd"));
-        
-        return transfer;
-    }
-
-    private InboundNameEnquiry parseInboundNameEnquiry(String xml) {
-        InboundNameEnquiry enquiry = new InboundNameEnquiry();
-        
-        enquiry.setMessageId(extractValue(xml, "MsgId"));
-        enquiry.setAccountNumber(extractAccountNumber(xml));
-        enquiry.setSourceBankCode(extractSourceBankCode(xml));
-        enquiry.setChannelCode(extractValue(xml, "ChnlCd"));
-        
-        return enquiry;
-    }
-
-    private String extractValue(String xml, String tag) {
-        String startTag = "<" + tag + ">";
-        String endTag = "</" + tag + ">";
-        int start = xml.indexOf(startTag);
-        if (start < 0) return null;
-        start += startTag.length();
-        int end = xml.indexOf(endTag, start);
-        if (end < 0) return null;
-        return xml.substring(start, end).trim();
-    }
-
-    private String extractAmount(String xml) {
-        // Look for IntrBkSttlmAmt or InstdAmt
-        String amount = extractValue(xml, "IntrBkSttlmAmt");
-        if (amount == null) {
-            amount = extractValue(xml, "InstdAmt");
-        }
-        // Remove any nested content
-        if (amount != null && amount.contains(">")) {
-            amount = amount.substring(amount.lastIndexOf(">") + 1);
-        }
-        return amount;
-    }
-
-    private String extractDebtorName(String xml) {
-        // Find Dbtr/Nm
-        int dbtrStart = xml.indexOf("<Dbtr>");
-        if (dbtrStart < 0) return null;
-        int dbtrEnd = xml.indexOf("</Dbtr>", dbtrStart);
-        String dbtrSection = xml.substring(dbtrStart, dbtrEnd);
-        return extractValue(dbtrSection, "Nm");
-    }
-
-    private String extractDebtorAccount(String xml) {
-        int dbtrAcctStart = xml.indexOf("<DbtrAcct>");
-        if (dbtrAcctStart < 0) return null;
-        int dbtrAcctEnd = xml.indexOf("</DbtrAcct>", dbtrAcctStart);
-        String section = xml.substring(dbtrAcctStart, dbtrAcctEnd);
-        return extractValue(section, "Id");
-    }
-
-    private String extractDebtorBankCode(String xml) {
-        int dbtrAgtStart = xml.indexOf("<DbtrAgt>");
-        if (dbtrAgtStart < 0) return null;
-        int dbtrAgtEnd = xml.indexOf("</DbtrAgt>", dbtrAgtStart);
-        String section = xml.substring(dbtrAgtStart, dbtrAgtEnd);
-        String mmbId = extractValue(section, "MmbId");
-        return mmbId != null ? mmbId : extractValue(section, "BICFI");
-    }
-
-    private String extractCreditorName(String xml) {
-        int cdtrStart = xml.indexOf("<Cdtr>");
-        if (cdtrStart < 0) return null;
-        int cdtrEnd = xml.indexOf("</Cdtr>", cdtrStart);
-        String section = xml.substring(cdtrStart, cdtrEnd);
-        return extractValue(section, "Nm");
-    }
-
-    private String extractCreditorAccount(String xml) {
-        int cdtrAcctStart = xml.indexOf("<CdtrAcct>");
-        if (cdtrAcctStart < 0) return null;
-        int cdtrAcctEnd = xml.indexOf("</CdtrAcct>", cdtrAcctStart);
-        String section = xml.substring(cdtrAcctStart, cdtrAcctEnd);
-        return extractValue(section, "Id");
-    }
-
-    private String extractAccountNumber(String xml) {
-        // For name enquiry, look in Vrfctn/PtyAndAcctId/Acct
-        int acctStart = xml.indexOf("<Acct>");
-        if (acctStart < 0) return null;
-        int acctEnd = xml.indexOf("</Acct>", acctStart);
-        String section = xml.substring(acctStart, acctEnd);
-        return extractValue(section, "Id");
-    }
-
-    private String extractSourceBankCode(String xml) {
-        // Look for Assgnr bank code
-        int assgnrStart = xml.indexOf("<Assgnr>");
-        if (assgnrStart < 0) return null;
-        int assgnrEnd = xml.indexOf("</Assgnr>", assgnrStart);
-        String section = xml.substring(assgnrStart, assgnrEnd);
-        String mmbId = extractValue(section, "MmbId");
-        return mmbId != null ? mmbId : extractValue(section, "BICFI");
     }
 
     private String buildErrorResponse(String status, String reason) {
@@ -434,15 +315,9 @@ public class NpsCallbackResource {
                             </TxInfAndSts>
                         </FIToFIPmtStsRpt>
                     </Document>
-                </BizMsg>""",
-                java.util.UUID.randomUUID().toString().replace("-", ""),
-                timestamp,
-                java.util.UUID.randomUUID().toString().replace("-", ""),
-                timestamp,
-                transfer.getMessageId(),
-                transfer.getEndToEndId(),
-                result.getStatus(),
-                result.isSuccess() ? "" : String.format("""
+                </BizMsg>""", java.util.UUID.randomUUID().toString().replace("-", ""), timestamp,
+                java.util.UUID.randomUUID().toString().replace("-", ""), timestamp, transfer.getMessageId(),
+                transfer.getEndToEndId(), result.getStatus(), result.isSuccess() ? "" : String.format("""
                         <StsRsnInf>
                             <Rsn><Cd>%s</Cd></Rsn>
                             <AddtlInf>%s</AddtlInf>
@@ -486,14 +361,9 @@ public class NpsCallbackResource {
                                 </Rpt>
                             </IdVrfctnRpt>
                         </Document>
-                    </BizMsg>""",
-                    java.util.UUID.randomUUID().toString().replace("-", ""),
-                    timestamp,
-                    java.util.UUID.randomUUID().toString().replace("-", ""),
-                    timestamp,
-                    enquiry.getMessageId(),
-                    result.getAccountName(),
-                    enquiry.getAccountNumber());
+                    </BizMsg>""", java.util.UUID.randomUUID().toString().replace("-", ""), timestamp,
+                    java.util.UUID.randomUUID().toString().replace("-", ""), timestamp, enquiry.getMessageId(),
+                    result.getAccountName(), enquiry.getAccountNumber());
         } else {
             return String.format("""
                     <?xml version="1.0" encoding="UTF-8"?>
@@ -518,12 +388,8 @@ public class NpsCallbackResource {
                                 </Rpt>
                             </IdVrfctnRpt>
                         </Document>
-                    </BizMsg>""",
-                    java.util.UUID.randomUUID().toString().replace("-", ""),
-                    timestamp,
-                    java.util.UUID.randomUUID().toString().replace("-", ""),
-                    timestamp,
-                    enquiry.getMessageId(),
+                    </BizMsg>""", java.util.UUID.randomUUID().toString().replace("-", ""), timestamp,
+                    java.util.UUID.randomUUID().toString().replace("-", ""), timestamp, enquiry.getMessageId(),
                     result.getReasonCode());
         }
     }
@@ -543,26 +409,66 @@ public class NpsCallbackResource {
         private String narration;
 
         // Getters and setters
-        public String getMessageId() { return messageId; }
-        public void setMessageId(String messageId) { this.messageId = messageId; }
-        public String getEndToEndId() { return endToEndId; }
-        public void setEndToEndId(String endToEndId) { this.endToEndId = endToEndId; }
-        public String getTransactionId() { return transactionId; }
-        public void setTransactionId(String transactionId) { this.transactionId = transactionId; }
-        public String getAmount() { return amount; }
-        public void setAmount(String amount) { this.amount = amount; }
-        public String getDebtorName() { return debtorName; }
-        public void setDebtorName(String debtorName) { this.debtorName = debtorName; }
-        public String getDebtorAccount() { return debtorAccount; }
-        public void setDebtorAccount(String debtorAccount) { this.debtorAccount = debtorAccount; }
-        public String getDebtorBankCode() { return debtorBankCode; }
-        public void setDebtorBankCode(String debtorBankCode) { this.debtorBankCode = debtorBankCode; }
-        public String getCreditorName() { return creditorName; }
-        public void setCreditorName(String creditorName) { this.creditorName = creditorName; }
-        public String getCreditorAccount() { return creditorAccount; }
-        public void setCreditorAccount(String creditorAccount) { this.creditorAccount = creditorAccount; }
-        public String getNarration() { return narration; }
-        public void setNarration(String narration) { this.narration = narration; }
+        public String getMessageId() {
+            return messageId;
+        }
+        public void setMessageId(String messageId) {
+            this.messageId = messageId;
+        }
+        public String getEndToEndId() {
+            return endToEndId;
+        }
+        public void setEndToEndId(String endToEndId) {
+            this.endToEndId = endToEndId;
+        }
+        public String getTransactionId() {
+            return transactionId;
+        }
+        public void setTransactionId(String transactionId) {
+            this.transactionId = transactionId;
+        }
+        public String getAmount() {
+            return amount;
+        }
+        public void setAmount(String amount) {
+            this.amount = amount;
+        }
+        public String getDebtorName() {
+            return debtorName;
+        }
+        public void setDebtorName(String debtorName) {
+            this.debtorName = debtorName;
+        }
+        public String getDebtorAccount() {
+            return debtorAccount;
+        }
+        public void setDebtorAccount(String debtorAccount) {
+            this.debtorAccount = debtorAccount;
+        }
+        public String getDebtorBankCode() {
+            return debtorBankCode;
+        }
+        public void setDebtorBankCode(String debtorBankCode) {
+            this.debtorBankCode = debtorBankCode;
+        }
+        public String getCreditorName() {
+            return creditorName;
+        }
+        public void setCreditorName(String creditorName) {
+            this.creditorName = creditorName;
+        }
+        public String getCreditorAccount() {
+            return creditorAccount;
+        }
+        public void setCreditorAccount(String creditorAccount) {
+            this.creditorAccount = creditorAccount;
+        }
+        public String getNarration() {
+            return narration;
+        }
+        public void setNarration(String narration) {
+            this.narration = narration;
+        }
     }
 
     public static class InboundNameEnquiry {
@@ -571,14 +477,30 @@ public class NpsCallbackResource {
         private String sourceBankCode;
         private String channelCode;
 
-        public String getMessageId() { return messageId; }
-        public void setMessageId(String messageId) { this.messageId = messageId; }
-        public String getAccountNumber() { return accountNumber; }
-        public void setAccountNumber(String accountNumber) { this.accountNumber = accountNumber; }
-        public String getSourceBankCode() { return sourceBankCode; }
-        public void setSourceBankCode(String sourceBankCode) { this.sourceBankCode = sourceBankCode; }
-        public String getChannelCode() { return channelCode; }
-        public void setChannelCode(String channelCode) { this.channelCode = channelCode; }
+        public String getMessageId() {
+            return messageId;
+        }
+        public void setMessageId(String messageId) {
+            this.messageId = messageId;
+        }
+        public String getAccountNumber() {
+            return accountNumber;
+        }
+        public void setAccountNumber(String accountNumber) {
+            this.accountNumber = accountNumber;
+        }
+        public String getSourceBankCode() {
+            return sourceBankCode;
+        }
+        public void setSourceBankCode(String sourceBankCode) {
+            this.sourceBankCode = sourceBankCode;
+        }
+        public String getChannelCode() {
+            return channelCode;
+        }
+        public void setChannelCode(String channelCode) {
+            this.channelCode = channelCode;
+        }
     }
 
     public static class CallbackResult {
@@ -612,10 +534,20 @@ public class NpsCallbackResource {
             return r;
         }
 
-        public boolean isSuccess() { return success; }
-        public String getStatus() { return status; }
-        public String getMessage() { return message; }
-        public String getReasonCode() { return reasonCode; }
-        public String getAccountName() { return accountName; }
+        public boolean isSuccess() {
+            return success;
+        }
+        public String getStatus() {
+            return status;
+        }
+        public String getMessage() {
+            return message;
+        }
+        public String getReasonCode() {
+            return reasonCode;
+        }
+        public String getAccountName() {
+            return accountName;
+        }
     }
 }

@@ -4,11 +4,11 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 /**
- * Builder for pacs.028.001.04 - FIToFIPaymentStatusRequest.
- * Used for transaction status query (requery).
+ * Builder for pacs.028.001.04 - FIToFIPaymentStatusRequest. Used for
+ * transaction status query (requery).
  * 
- * This is used to check the status of a previously sent transaction
- * when no response was received or status is unclear.
+ * This is used to check the status of a previously sent transaction when no
+ * response was received or status is unclear.
  */
 @ApplicationScoped
 public class Pacs028Builder {
@@ -21,8 +21,10 @@ public class Pacs028Builder {
     /**
      * Builds a pacs.028 payment status request.
      * 
-     * @param originalMsgId The MsgId of the original transaction
-     * @param originalEndToEndId The EndToEndId of the original transaction
+     * @param originalMsgId
+     *            The MsgId of the original transaction
+     * @param originalEndToEndId
+     *            The EndToEndId of the original transaction
      * @return Complete ISO 20022 XML message
      */
     public String build(String originalMsgId, String originalEndToEndId) {
@@ -43,9 +45,17 @@ public class Pacs028Builder {
         return build(request.getOriginalMsgId(), request.getOriginalEndToEndId());
     }
 
-    private String buildDocument(String msgId, String creDate, String originalMsgId, 
-            String originalEndToEndId) {
+    private String buildDocument(String msgId, String creDate, String originalMsgId, String originalEndToEndId) {
 
+        String originalGroup = originalMsgId == null || originalMsgId.isBlank() ? "" : String.format("""
+                <OrgnlGrpInf>
+                    <OrgnlMsgId>%s</OrgnlMsgId>
+                    <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
+                </OrgnlGrpInf>
+                """, escapeXml(originalMsgId));
+        String endToEnd = originalEndToEndId == null || originalEndToEndId.isBlank()
+                ? ""
+                : "<OrgnlEndToEndId>" + escapeXml(originalEndToEndId) + "</OrgnlEndToEndId>";
         return String.format("""
                 <Document xmlns="%s">
                     <FIToFIPmtStsReq>
@@ -53,12 +63,9 @@ public class Pacs028Builder {
                             <MsgId>%s</MsgId>
                             <CreDtTm>%s</CreDtTm>
                         </GrpHdr>
-                        <OrgnlGrpInf>
-                            <OrgnlMsgId>%s</OrgnlMsgId>
-                            <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
-                        </OrgnlGrpInf>
+                        %s
                         <TxInf>
-                            <OrgnlEndToEndId>%s</OrgnlEndToEndId>
+                            %s
                             <InstgAgt>
                                 <FinInstnId>
                                     <BICFI>%s</BICFI>
@@ -66,13 +73,13 @@ public class Pacs028Builder {
                             </InstgAgt>
                         </TxInf>
                     </FIToFIPmtStsReq>
-                </Document>""",
-                NpsMessageBuilder.PACS_028_NS,
-                msgId,
-                creDate,
-                originalMsgId,
-                originalEndToEndId,
+                </Document>""", NpsMessageBuilder.PACS_028_NS, msgId, creDate, originalGroup, endToEnd,
                 baseBuilder.getSourceBic());
+    }
+
+    private String escapeXml(String value) {
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+                .replace("'", "&apos;");
     }
 
     /**

@@ -1,33 +1,30 @@
 package com.provider.nps.client;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
-import java.time.Instant;
-import java.util.Base64;
-import java.util.concurrent.locks.ReentrantLock;
-
-import org.eclipse.microprofile.config.inject.ConfigProperty;
-
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-
 import io.quarkus.logging.Log;
 import io.quarkus.scheduler.Scheduled;
 import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Base64;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
  * NPS OAuth2 Token Manager.
  * 
- * Handles client_credentials flow to obtain access tokens from NIBSS.
- * Token endpoint: POST https://apitest.nibss-plc.com.ng:1443/reset
+ * Handles client_credentials flow to obtain access tokens from NIBSS. Token
+ * endpoint: POST https://apitest.nibss-plc.com.ng:1443/reset
  * 
- * Features:
- * - Automatic token refresh before expiry
- * - Thread-safe token access
+ * Features: - Automatic token refresh before expiry - Thread-safe token access
  * - Retry logic for transient failures
  */
 @ApplicationScoped
@@ -48,7 +45,7 @@ public class NpsTokenManager {
     @ConfigProperty(name = "nps.token-refresh-margin-seconds", defaultValue = "300")
     int tokenRefreshMarginSeconds;
 
-    @ConfigProperty(name = "nps.timeout-ms", defaultValue = "60000")
+    @ConfigProperty(name = "nps.timeout-ms", defaultValue = "20000")
     int timeoutMs;
 
     private final ReentrantLock lock = new ReentrantLock();
@@ -60,9 +57,7 @@ public class NpsTokenManager {
 
     @PostConstruct
     void init() {
-        httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(timeoutMs))
-                .build();
+        httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofMillis(timeoutMs)).build();
 
         // Fetch initial token
         try {
@@ -77,20 +72,43 @@ public class NpsTokenManager {
      * Gets a valid access token, refreshing if necessary.
      * 
      * @return The current valid access token
-     * @throws NpsTokenException if token cannot be obtained
+     * @throws NpsTokenException
+     *             if token cannot be obtained
      */
     public String getAccessToken() {
-        lock.lock();
-        try {
-            if (isTokenValid()) {
-                return accessToken;
-            }
+        return getAccessToken(Duration.ofMillis(timeoutMs));
+    }
 
-            refreshToken();
+    public String getAccessToken(Duration budget) {
+        long deadline = System.nanoTime() + budget.toNanos();
+        acquireLock(deadline);
+        try {
+            if (!isTokenValid()) {
+                refreshToken(deadline);
+            }
             return accessToken;
         } finally {
             lock.unlock();
         }
+    }
+
+    private void acquireLock(long deadline) {
+        try {
+            if (!lock.tryLock(remainingTime(deadline).toNanos(), TimeUnit.NANOSECONDS)) {
+                throw new NpsTokenException("Timed out waiting for token refresh");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new NpsTokenException("Token refresh interrupted", e);
+        }
+    }
+
+    private Duration remainingTime(long deadline) {
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) {
+            throw new NpsTokenException("Token request deadline exceeded");
+        }
+        return Duration.ofNanos(remaining);
     }
 
     /**
@@ -108,20 +126,31 @@ public class NpsTokenManager {
      * Refreshes the access token from NIBSS.
      */
     private void refreshToken() {
+        refreshToken(System.nanoTime() + Duration.ofMillis(timeoutMs).toNanos());
+    }
+
+    private void refreshToken(long deadline) {
         Exception lastException = null;
 
         for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
             try {
-                fetchNewToken();
+                fetchNewToken(deadline);
                 Log.infof("NPS token refreshed successfully, expires at %s", tokenExpiry);
                 return;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new NpsTokenException("Token refresh interrupted", e);
             } catch (Exception e) {
                 lastException = e;
                 Log.warnf("Token fetch attempt %d failed: %s", attempt, e.getMessage());
 
                 if (attempt < MAX_RETRIES) {
                     try {
-                        Thread.sleep(RETRY_DELAY.toMillis() * attempt);
+                        long delayNanos = RETRY_DELAY.multipliedBy(attempt).toNanos();
+                        if (delayNanos >= remainingTime(deadline).toNanos()) {
+                            throw new NpsTokenException("No time remaining to retry token request", e);
+                        }
+                        TimeUnit.NANOSECONDS.sleep(delayNanos);
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
                         throw new NpsTokenException("Token refresh interrupted", ie);
@@ -133,28 +162,24 @@ public class NpsTokenManager {
         throw new NpsTokenException("Failed to refresh NPS token after " + MAX_RETRIES + " attempts", lastException);
     }
 
-    private void fetchNewToken() throws Exception {
+    private void fetchNewToken(long deadline) throws Exception {
         // Build Basic auth header
         String credentials = clientId + ":" + clientSecret;
-        String basicAuth = "Basic " + Base64.getEncoder().encodeToString(credentials.getBytes());
+        String basicAuth = "Basic " + Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
 
         // Build request body (client_credentials grant)
         String requestBody = "grant_type=client_credentials";
 
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(tokenUrl))
-                .timeout(Duration.ofMillis(timeoutMs))
-                .header("Authorization", basicAuth)
-                .header("Content-Type", "application/x-www-form-urlencoded")
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody))
-                .build();
+        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(tokenUrl)).timeout(remainingTime(deadline))
+                .header("Authorization", basicAuth).header("Content-Type", "application/x-www-form-urlencoded")
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody)).build();
 
         Log.debugf("Fetching NPS token from %s", tokenUrl);
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
         if (response.statusCode() != 200) {
-            Log.errorf("Token request failed with status %d: %s", response.statusCode(), response.body());
+            Log.errorf("Token request failed with status %d", response.statusCode());
             throw new NpsTokenException("Token request failed with status " + response.statusCode());
         }
 
@@ -165,7 +190,7 @@ public class NpsTokenManager {
         JsonNode json = objectMapper.readTree(responseBody);
 
         if (!json.has("access_token")) {
-            throw new NpsTokenException("Token response missing access_token: " + responseBody);
+            throw new NpsTokenException("Token response missing access_token");
         }
 
         accessToken = json.get("access_token").asText();
@@ -178,8 +203,8 @@ public class NpsTokenManager {
     }
 
     /**
-     * Scheduled task to proactively refresh token before expiry.
-     * Runs every 5 minutes to check if token needs refresh.
+     * Scheduled task to proactively refresh token before expiry. Runs every 5
+     * minutes to check if token needs refresh.
      */
     @Scheduled(every = "5m")
     void scheduledTokenRefresh() {
@@ -202,11 +227,16 @@ public class NpsTokenManager {
      * Forces a token refresh. Use after receiving 401 from NPS.
      */
     public void forceRefresh() {
-        lock.lock();
+        forceRefresh(Duration.ofMillis(timeoutMs));
+    }
+
+    public void forceRefresh(Duration budget) {
+        long deadline = System.nanoTime() + budget.toNanos();
+        acquireLock(deadline);
         try {
             accessToken = null;
             tokenExpiry = null;
-            refreshToken();
+            refreshToken(deadline);
         } finally {
             lock.unlock();
         }

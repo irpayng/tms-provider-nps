@@ -86,7 +86,7 @@ jobs:
           mvn -f /tmp/provider-client/pom.xml install -q -B
 
       - name: Run tests
-        run: mvn test -B -Dnet.bytebuddy.experimental=true -DskipTests
+        run: mvn test -B -Dnet.bytebuddy.experimental=true
         env:
           QUARKUS_PROFILE: test
 

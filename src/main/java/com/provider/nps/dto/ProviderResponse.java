@@ -3,8 +3,8 @@ package com.provider.nps.dto;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
- * Standard response DTO for provider operations.
- * Matches the pattern used by other providers (NIP, NIBSS).
+ * Standard response DTO for provider operations. Matches the pattern used by
+ * other providers (NIP, NIBSS).
  */
 public class ProviderResponse {
 
@@ -49,7 +49,7 @@ public class ProviderResponse {
         return r;
     }
 
-    public static ProviderResponse successWithXml(String message, String providerReference, String requestId, 
+    public static ProviderResponse successWithXml(String message, String providerReference, String requestId,
             String requestXml, String responseXml) {
         ProviderResponse r = new ProviderResponse("success", message, providerReference, requestId);
         r.requestXml = requestXml;

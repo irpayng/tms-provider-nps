@@ -1,15 +1,12 @@
 package com.provider.nps.logging;
 
-import java.time.Instant;
-
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.provider.nps.client.NpsClient.NpsResponse;
-
 import io.quarkus.logging.Log;
 import io.smallrye.reactive.messaging.kafka.api.OutgoingKafkaRecordMetadata;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-
+import java.time.Instant;
 import org.eclipse.microprofile.reactive.messaging.Channel;
 import org.eclipse.microprofile.reactive.messaging.Emitter;
 import org.eclipse.microprofile.reactive.messaging.Message;
@@ -17,10 +14,7 @@ import org.eclipse.microprofile.reactive.messaging.Message;
 /**
  * Kafka-based transaction logger for NPS operations.
  * 
- * Logs all NPS transactions to Kafka for:
- * - Audit trail
- * - Debugging
- * - Analytics
+ * Logs all NPS transactions to Kafka for: - Audit trail - Debugging - Analytics
  * - Compliance reporting
  */
 @ApplicationScoped
@@ -43,14 +37,11 @@ public class NpsTransactionLogger {
         try {
             String json = objectMapper.writeValueAsString(log);
 
-            var metadata = OutgoingKafkaRecordMetadata.<String>builder()
-                    .withKey(log.reference)
-                    .build();
+            var metadata = OutgoingKafkaRecordMetadata.<String>builder().withKey(log.reference).build();
 
             npsLogsEmitter.send(Message.of(json).addMetadata(metadata));
 
-            Log.debugf("Logged NPS transaction: ref=%s, action=%s, status=%s", 
-                    log.reference, log.action, log.status);
+            Log.debugf("Logged NPS transaction: ref=%s, action=%s, status=%s", log.reference, log.action, log.status);
 
         } catch (Exception e) {
             Log.error("Failed to log NPS transaction", e);
@@ -60,9 +51,9 @@ public class NpsTransactionLogger {
     /**
      * Logs a name enquiry operation.
      */
-    public void logNameEnquiry(String reference, String accountNumber, String bankCode,
-            NpsResponse response, long durationMs) {
-        
+    public void logNameEnquiry(String reference, String accountNumber, String bankCode, NpsResponse response,
+            long durationMs) {
+
         NpsTransactionLog log = new NpsTransactionLog();
         log.reference = reference;
         log.action = "name-enquiry";
@@ -83,9 +74,9 @@ public class NpsTransactionLogger {
     /**
      * Logs a bank transfer operation.
      */
-    public void logBankTransfer(String reference, String creditorAccount, String creditorBankCode,
-            String amount, NpsResponse response, long durationMs) {
-        
+    public void logBankTransfer(String reference, String creditorAccount, String creditorBankCode, String amount,
+            NpsResponse response, long durationMs) {
+
         NpsTransactionLog log = new NpsTransactionLog();
         log.reference = reference;
         log.action = "bank-transfer";
@@ -107,9 +98,8 @@ public class NpsTransactionLogger {
     /**
      * Logs a requery operation.
      */
-    public void logRequery(String reference, String originalMsgId,
-            NpsResponse response, long durationMs) {
-        
+    public void logRequery(String reference, String originalMsgId, NpsResponse response, long durationMs) {
+
         NpsTransactionLog log = new NpsTransactionLog();
         log.reference = reference;
         log.action = "requery";
@@ -141,9 +131,7 @@ public class NpsTransactionLogger {
 
             String json = objectMapper.writeValueAsString(event);
 
-            var metadata = OutgoingKafkaRecordMetadata.<String>builder()
-                    .withKey(reference)
-                    .build();
+            var metadata = OutgoingKafkaRecordMetadata.<String>builder().withKey(reference).build();
 
             clientLogsEmitter.send(Message.of(json).addMetadata(metadata));
 
@@ -166,7 +154,8 @@ public class NpsTransactionLogger {
     }
 
     private String sanitizeXml(String xml) {
-        if (xml == null) return null;
+        if (xml == null)
+            return null;
         // Truncate very long XML for logging (keep first 10KB)
         if (xml.length() > 10240) {
             return xml.substring(0, 10240) + "...[truncated]";

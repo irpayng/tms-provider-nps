@@ -1,39 +1,34 @@
 package com.provider.nps.client;
 
+import com.provider.nps.crypto.NpsXmlEncryptor;
+import com.provider.nps.crypto.NpsXmlSigner;
+import com.provider.nps.message.NpsPaymentStatus;
+import com.provider.nps.xml.NpsXml;
+import io.quarkus.logging.Log;
+import jakarta.annotation.PostConstruct;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-
 import org.eclipse.microprofile.config.inject.ConfigProperty;
-
-import com.provider.nps.crypto.NpsXmlEncryptor;
-import com.provider.nps.crypto.NpsXmlSigner;
-
-import io.quarkus.logging.Log;
-import jakarta.annotation.PostConstruct;
-import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
 
 /**
  * NPS HTTP Client.
  * 
  * Handles all HTTP communication with NIBSS NPS endpoints.
  * 
- * NPS Endpoints (per integration doc):
- * - /nps/acmt/023 - Account identification (Name Enquiry request)
- * - /nps/acmt/024 - Account identification response
- * - /nps/pacs/008 - Credit transfer (FI to FI)
- * - /nps/pacs/002 - Payment status report
- * - /nps/pain/001 - Payment initiation (Customer to FI)
- * - /nps/pain/002 - Payment initiation status
- * - /nps/pacs/028 - Payment status request (Requery)
+ * NPS Endpoints (per integration doc): - /nps/acmt/023 - Account identification
+ * (Name Enquiry request) - /nps/acmt/024 - Account identification response -
+ * /nps/pacs/008 - Credit transfer (FI to FI) - /nps/pacs/002 - Payment status
+ * report - /nps/pain/001 - Payment initiation (Customer to FI) - /nps/pain/002
+ * - Payment initiation status - /nps/pacs/028 - Payment status request
+ * (Requery)
  * 
- * All requests are:
- * 1. Signed with W3C XMLDSIG (RSA-SHA256)
- * 2. Encrypted with AES-256-GCM + RSA-OAEP key wrapping
- * 3. Sent with OAuth2 Bearer token
+ * All requests are: 1. Signed with W3C XMLDSIG (RSA-SHA256) 2. Encrypted with
+ * AES-256-GCM + RSA-OAEP key wrapping 3. Sent with OAuth2 Bearer token
  */
 @ApplicationScoped
 public class NpsClient {
@@ -41,7 +36,7 @@ public class NpsClient {
     @ConfigProperty(name = "nps.base-url")
     String baseUrl;
 
-    @ConfigProperty(name = "nps.timeout-ms", defaultValue = "60000")
+    @ConfigProperty(name = "nps.timeout-ms", defaultValue = "20000")
     int timeoutMs;
 
     @ConfigProperty(name = "nps.skip-crypto", defaultValue = "false")
@@ -60,16 +55,15 @@ public class NpsClient {
 
     @PostConstruct
     void init() {
-        httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(timeoutMs))
-                .build();
+        httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofMillis(timeoutMs)).build();
         Log.infof("NpsClient initialized with base URL: %s", baseUrl);
     }
 
     /**
      * Sends a name enquiry request (acmt.023).
      * 
-     * @param xml The unsigned XML message
+     * @param xml
+     *            The unsigned XML message
      * @return The NPS response
      */
     public NpsResponse sendNameEnquiry(String xml) throws Exception {
@@ -79,7 +73,8 @@ public class NpsClient {
     /**
      * Sends a credit transfer request (pacs.008).
      * 
-     * @param xml The unsigned XML message
+     * @param xml
+     *            The unsigned XML message
      * @return The NPS response
      */
     public NpsResponse sendCreditTransfer(String xml) throws Exception {
@@ -89,7 +84,8 @@ public class NpsClient {
     /**
      * Sends a payment initiation request (pain.001).
      * 
-     * @param xml The unsigned XML message
+     * @param xml
+     *            The unsigned XML message
      * @return The NPS response
      */
     public NpsResponse sendPaymentInitiation(String xml) throws Exception {
@@ -99,7 +95,8 @@ public class NpsClient {
     /**
      * Sends a payment status request / requery (pacs.028).
      * 
-     * @param xml The unsigned XML message
+     * @param xml
+     *            The unsigned XML message
      * @return The NPS response
      */
     public NpsResponse sendPaymentStatusRequest(String xml) throws Exception {
@@ -110,6 +107,7 @@ public class NpsClient {
      * Core method to send request to NPS with signing and encryption.
      */
     private NpsResponse sendRequest(String endpoint, String xml) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofMillis(timeoutMs).toNanos();
         String url = baseUrl + endpoint;
         Log.debugf("Sending NPS request to: %s", url);
 
@@ -121,45 +119,44 @@ public class NpsClient {
         } else {
             // Step 1: Sign the XML
             String signedXml = xmlSigner.sign(xml);
-            Log.tracef("Signed XML:\n%s", signedXml);
 
             // Step 2: Encrypt the signed XML
             requestXml = xmlEncryptor.encrypt(signedXml);
-            Log.tracef("Encrypted XML:\n%s", requestXml);
+
         }
 
-        // Step 3: Get OAuth token
-        String token = tokenManager.getAccessToken();
-
-        // Step 4: Build and send HTTP request
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .timeout(Duration.ofMillis(timeoutMs))
-                .header("Authorization", "Bearer " + token)
-                .header("Content-Type", "application/xml")
-                .header("Accept", "application/xml")
-                .POST(HttpRequest.BodyPublishers.ofString(requestXml))
-                .build();
-
-        long startTime = System.currentTimeMillis();
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        long elapsed = System.currentTimeMillis() - startTime;
-
-        Log.infof("NPS %s response: status=%d, elapsed=%dms", endpoint, response.statusCode(), elapsed);
-
-        // Handle 401 - token might be expired
+        HttpResponse<String> response = sendHttpRequest(url, requestXml, deadline);
         if (response.statusCode() == 401) {
-            Log.warn("Received 401 from NPS, refreshing token and retrying");
-            tokenManager.forceRefresh();
-            return sendRequest(endpoint, xml); // Retry once with new token
+            Log.warn("Received 401 from NPS, refreshing token and retrying once");
+            tokenManager.forceRefresh(remainingTime(deadline));
+            response = sendHttpRequest(url, requestXml, deadline);
         }
-
-        return processResponse(response, endpoint, xml, requestXml);
+        return processResponse(response, endpoint, requestXml);
     }
 
-    private NpsResponse processResponse(HttpResponse<String> response, String endpoint, 
-            String originalXml, String sentXml) throws Exception {
-        
+    private HttpResponse<String> sendHttpRequest(String url, String requestXml, long deadline) throws Exception {
+        String token = tokenManager.getAccessToken(remainingTime(deadline));
+        long remainingNanos = deadline - System.nanoTime();
+        if (remainingNanos <= 0) {
+            throw new java.net.http.HttpTimeoutException("NPS request deadline exceeded");
+        }
+        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).timeout(Duration.ofNanos(remainingNanos))
+                .header("Authorization", "Bearer " + token).header("Content-Type", "application/xml")
+                .header("Accept", "application/xml").POST(HttpRequest.BodyPublishers.ofString(requestXml)).build();
+        return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private Duration remainingTime(long deadline) throws java.net.http.HttpTimeoutException {
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) {
+            throw new java.net.http.HttpTimeoutException("NPS request deadline exceeded");
+        }
+        return Duration.ofNanos(remaining);
+    }
+
+    private NpsResponse processResponse(HttpResponse<String> response, String endpoint, String sentXml)
+            throws Exception {
+
         String responseBody = response.body();
         int statusCode = response.statusCode();
 
@@ -179,12 +176,13 @@ public class NpsClient {
                 } else {
                     // Decrypt the response
                     decryptedXml = xmlEncryptor.decrypt(responseBody);
-                    Log.tracef("Decrypted response:\n%s", decryptedXml);
 
                     // Verify signature
                     signatureValid = xmlSigner.verify(decryptedXml);
                     if (!signatureValid) {
                         Log.warnf("NPS response signature verification failed for %s", endpoint);
+                        npsResponse.setErrorMessage("Invalid NPS response signature");
+                        return npsResponse;
                     }
                 }
 
@@ -209,64 +207,25 @@ public class NpsClient {
     }
 
     private void parseResponseCode(NpsResponse response, String xml) {
-        try {
-            // Extract response code from various possible locations
-            // pacs.002: /Document/FIToFIPmtStsRpt/TxInfAndSts/TxSts
-            // acmt.024: /Document/IdVrfctnRpt/Rpt/Rslt/Rsn
-            // pain.002: /Document/CstmrPmtStsRpt/OrgnlPmtInfAndSts/TxInfAndSts/TxSts
-
-            if (xml.contains("<TxSts>")) {
-                int start = xml.indexOf("<TxSts>") + 7;
-                int end = xml.indexOf("</TxSts>");
-                if (end > start) {
-                    response.setResponseCode(xml.substring(start, end));
-                }
-            } else if (xml.contains("<Rsn>")) {
-                // For name enquiry response
-                int start = xml.indexOf("<Rsn>") + 5;
-                int end = xml.indexOf("</Rsn>");
-                if (end > start) {
-                    String rsn = xml.substring(start, end);
-                    // Extract code from nested element if present
-                    if (rsn.contains("<Cd>")) {
-                        int codeStart = rsn.indexOf("<Cd>") + 4;
-                        int codeEnd = rsn.indexOf("</Cd>");
-                        response.setResponseCode(rsn.substring(codeStart, codeEnd));
-                    } else {
-                        response.setResponseCode(rsn);
-                    }
-                }
-            }
-
-            // Extract message ID for correlation
-            if (xml.contains("<MsgId>")) {
-                int start = xml.indexOf("<MsgId>") + 7;
-                int end = xml.indexOf("</MsgId>");
-                if (end > start) {
-                    response.setMessageId(xml.substring(start, end));
-                }
-            }
-
-        } catch (Exception e) {
-            Log.warn("Failed to parse response code from XML", e);
-        }
+        var document = NpsXml.parse(xml);
+        String status = NpsXml.first(document, "TxSts");
+        response.setResponseCode(status != null ? status : NpsXml.first(document, "Cd"));
+        response.setMessageId(NpsXml.first(document, "MsgId"));
     }
 
     /**
      * Sends a raw request without signing/encryption (for testing).
      */
     public NpsResponse sendRaw(String endpoint, String xml) throws Exception {
+        if (!skipCrypto) {
+            throw new IllegalStateException("Raw requests are available only when test crypto bypass is enabled");
+        }
         String url = baseUrl + endpoint;
         String token = tokenManager.getAccessToken();
 
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .timeout(Duration.ofMillis(timeoutMs))
-                .header("Authorization", "Bearer " + token)
-                .header("Content-Type", "application/xml")
-                .header("Accept", "application/xml")
-                .POST(HttpRequest.BodyPublishers.ofString(xml))
-                .build();
+        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).timeout(Duration.ofMillis(timeoutMs))
+                .header("Authorization", "Bearer " + token).header("Content-Type", "application/xml")
+                .header("Accept", "application/xml").POST(HttpRequest.BodyPublishers.ofString(xml)).build();
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
@@ -369,36 +328,30 @@ public class NpsClient {
         }
 
         /**
-         * Checks if transaction was successful based on NPS response codes.
-         * ACTC, ACCP, ACSP = Success
-         * RJCT = Rejected
-         * PDNG = Pending
+         * Checks if transaction was successful based on NPS response codes. ACSP, ACSC
+         * = Successful payment status; ACTC and ACCP are acknowledgements RJCT =
+         * Rejected PDNG = Pending
          */
         public boolean isTransactionSuccessful() {
             if (responseCode == null) {
                 return false;
             }
-            return "ACTC".equals(responseCode) || "ACCP".equals(responseCode) || "ACSP".equals(responseCode);
+            return success && NpsPaymentStatus.fromCode(responseCode).isSuccessful();
         }
 
         public boolean isTransactionPending() {
-            return "PDNG".equals(responseCode);
+            return NpsPaymentStatus.fromCode(responseCode).isPending();
         }
 
         public boolean isTransactionRejected() {
-            return "RJCT".equals(responseCode);
+            return success && NpsPaymentStatus.fromCode(responseCode).isRejected();
         }
 
         @Override
         public String toString() {
-            return "NpsResponse{" +
-                    "success=" + success +
-                    ", httpStatus=" + httpStatus +
-                    ", responseCode='" + responseCode + '\'' +
-                    ", messageId='" + messageId + '\'' +
-                    ", signatureValid=" + signatureValid +
-                    ", errorMessage='" + errorMessage + '\'' +
-                    '}';
+            return "NpsResponse{" + "success=" + success + ", httpStatus=" + httpStatus + ", responseCode='"
+                    + responseCode + '\'' + ", messageId='" + messageId + '\'' + ", signatureValid=" + signatureValid
+                    + ", errorMessage='" + errorMessage + '\'' + '}';
         }
     }
 }

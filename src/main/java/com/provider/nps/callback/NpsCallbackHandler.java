@@ -7,12 +7,14 @@ import com.provider.nps.callback.NpsCallbackResource.InboundNameEnquiry;
 import com.provider.nps.message.NpsResponseParser.NameEnquiryResponse;
 import com.provider.nps.message.NpsResponseParser.PaymentInitiationStatusResponse;
 import com.provider.nps.message.NpsResponseParser.PaymentStatusResponse;
-
 import io.quarkus.logging.Log;
 import io.smallrye.reactive.messaging.kafka.api.OutgoingKafkaRecordMetadata;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-
+import java.math.BigDecimal;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.reactive.messaging.Channel;
 import org.eclipse.microprofile.reactive.messaging.Emitter;
 import org.eclipse.microprofile.reactive.messaging.Message;
@@ -20,16 +22,18 @@ import org.eclipse.microprofile.reactive.messaging.Message;
 /**
  * Handler for NPS callback events.
  * 
- * This is a placeholder implementation that publishes events to Kafka
- * for processing by other services (e.g., transaction service, wallet service).
+ * This is a placeholder implementation that publishes events to Kafka for
+ * processing by other services (e.g., transaction service, wallet service).
  * 
- * In production, this would integrate with:
- * - Account lookup service (for name enquiry)
- * - Wallet/ledger service (for inbound credits)
- * - Transaction service (for status updates)
+ * In production, this would integrate with: - Account lookup service (for name
+ * enquiry) - Wallet/ledger service (for inbound credits) - Transaction service
+ * (for status updates)
  */
 @ApplicationScoped
 public class NpsCallbackHandler {
+
+    @ConfigProperty(name = "nps.callback.publish-timeout-ms", defaultValue = "5000")
+    long publishTimeoutMs = 5000;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -42,14 +46,14 @@ public class NpsCallbackHandler {
     Emitter<String> statusUpdateEmitter;
 
     /**
-     * Handles an inbound credit transfer (pacs.008).
-     * Another bank is sending us funds for one of our customers.
+     * Handles an inbound credit transfer (pacs.008). Another bank is sending us
+     * funds for one of our customers.
      * 
      * @return CallbackResult with ACTC (accepted) or RJCT (rejected)
      */
     public CallbackResult handleInboundCreditTransfer(InboundCreditTransfer transfer) {
-        Log.infof("Processing inbound credit transfer: msgId=%s, amount=%s, creditor=%s",
-                transfer.getMessageId(), transfer.getAmount(), transfer.getCreditorAccount());
+        Log.infof("Processing inbound credit transfer: msgId=%s, amount=%s, creditor=%s", transfer.getMessageId(),
+                transfer.getAmount(), transfer.getCreditorAccount());
 
         try {
             // TODO: In production, look up the creditor account in our system
@@ -64,27 +68,33 @@ public class NpsCallbackHandler {
                 return CallbackResult.rejected("AM01", "Invalid amount");
             }
 
-            // Publish to Kafka for async processing
+            if (new BigDecimal(transfer.getAmount()).signum() <= 0) {
+                return CallbackResult.rejected("AM01", "Amount must be positive");
+            }
+            if (transfer.getMessageId() == null || transfer.getMessageId().isBlank()) {
+                return CallbackResult.rejected("FF01", "Missing message ID");
+            }
+
+            // Wait for broker acknowledgement before acknowledging the callback.
             publishInboundTransfer(transfer);
 
             // Return acceptance - actual crediting happens asynchronously
             return CallbackResult.accepted();
 
-        } catch (Exception e) {
-            Log.error("Failed to process inbound credit transfer", e);
-            return CallbackResult.rejected("FF01", "System error");
+        } catch (NumberFormatException e) {
+            return CallbackResult.rejected("AM01", "Invalid amount");
         }
     }
 
     /**
-     * Handles inbound name enquiry (acmt.023).
-     * Another bank is verifying one of our accounts.
+     * Handles inbound name enquiry (acmt.023). Another bank is verifying one of our
+     * accounts.
      * 
      * @return CallbackResult with account name or rejection
      */
     public CallbackResult handleInboundNameEnquiry(InboundNameEnquiry enquiry) {
-        Log.infof("Processing inbound name enquiry: account=%s, source=%s",
-                enquiry.getAccountNumber(), enquiry.getSourceBankCode());
+        Log.infof("Processing inbound name enquiry: account=%s, source=%s", enquiry.getAccountNumber(),
+                enquiry.getSourceBankCode());
 
         try {
             // TODO: In production, look up account in our system
@@ -98,9 +108,10 @@ public class NpsCallbackHandler {
             // Placeholder: In production, query account database
             // For now, return a mock response
             // In real implementation:
-            // AccountInfo account = accountService.findByNumber(enquiry.getAccountNumber());
+            // AccountInfo account =
+            // accountService.findByNumber(enquiry.getAccountNumber());
             // if (account == null) {
-            //     return CallbackResult.rejected("AC01", "Account not found");
+            // return CallbackResult.rejected("AC01", "Account not found");
             // }
             // return CallbackResult.success(account.getName());
 
@@ -115,39 +126,38 @@ public class NpsCallbackHandler {
     }
 
     /**
-     * Handles payment status update (pacs.002 callback).
-     * Updates our transaction status based on NPS notification.
+     * Handles payment status update (pacs.002 callback). Updates our transaction
+     * status based on NPS notification.
      */
     public void handlePaymentStatusUpdate(PaymentStatusResponse status) {
-        Log.infof("Processing payment status update: originalMsgId=%s, status=%s",
-                status.getOriginalMessageId(), status.getTransactionStatus());
+        Log.infof("Processing payment status update: originalMsgId=%s, status=%s", status.getOriginalMessageId(),
+                status.getTransactionStatus());
 
         try {
             // Publish to Kafka for transaction service to process
-            publishStatusUpdate("pacs002", status.getOriginalMessageId(), 
-                    status.getTransactionStatus(), status.getReasonCode());
+            publishStatusUpdate("pacs002", status.getOriginalMessageId(), status.getTransactionStatus(),
+                    status.getReasonCode());
 
         } catch (Exception e) {
-            Log.error("Failed to process payment status update", e);
+            throw new IllegalStateException("Failed to process payment status update", e);
         }
     }
 
     /**
-     * Handles name enquiry response (acmt.024 callback).
-     * Async response to our outbound name enquiry.
+     * Handles name enquiry response (acmt.024 callback). Async response to our
+     * outbound name enquiry.
      */
     public void handleNameEnquiryResponse(NameEnquiryResponse response) {
-        Log.infof("Processing name enquiry response: msgId=%s, name=%s",
-                response.getMessageId(), response.getAccountName());
+        Log.infof("Processing name enquiry response: msgId=%s, name=%s", response.getMessageId(),
+                response.getAccountName());
 
         try {
             // Publish to Kafka - the original requester should be waiting for this
-            publishStatusUpdate("acmt024", response.getMessageId(),
-                    response.isSuccess() ? "SUCCESS" : "FAILED",
+            publishStatusUpdate("acmt024", response.getMessageId(), response.isSuccess() ? "SUCCESS" : "FAILED",
                     response.getReasonCode());
 
         } catch (Exception e) {
-            Log.error("Failed to process name enquiry response", e);
+            throw new IllegalStateException("Failed to process name enquiry response", e);
         }
     }
 
@@ -155,15 +165,15 @@ public class NpsCallbackHandler {
      * Handles payment initiation status (pain.002 callback).
      */
     public void handlePaymentInitiationResponse(PaymentInitiationStatusResponse response) {
-        Log.infof("Processing payment initiation status: msgId=%s, status=%s",
-                response.getMessageId(), response.getTransactionStatus());
+        Log.infof("Processing payment initiation status: msgId=%s, status=%s", response.getMessageId(),
+                response.getTransactionStatus());
 
         try {
-            publishStatusUpdate("pain002", response.getOriginalMessageId(),
-                    response.getTransactionStatus(), response.getReasonCode());
+            publishStatusUpdate("pain002", response.getOriginalMessageId(), response.getTransactionStatus(),
+                    response.getReasonCode());
 
         } catch (Exception e) {
-            Log.error("Failed to process payment initiation status", e);
+            throw new IllegalStateException("Failed to process payment initiation status", e);
         }
     }
 
@@ -185,21 +195,18 @@ public class NpsCallbackHandler {
             String json = objectMapper.writeValueAsString(event);
 
             // Use message ID as Kafka key for partitioning
-            var metadata = OutgoingKafkaRecordMetadata.<String>builder()
-                    .withKey(transfer.getMessageId())
-                    .build();
+            var metadata = OutgoingKafkaRecordMetadata.<String>builder().withKey(transfer.getMessageId()).build();
 
-            inboundTransferEmitter.send(Message.of(json).addMetadata(metadata));
+            publishAndAwait(inboundTransferEmitter, Message.of(json).addMetadata(metadata));
 
             Log.debugf("Published inbound transfer event: %s", transfer.getMessageId());
 
         } catch (Exception e) {
-            Log.error("Failed to publish inbound transfer event", e);
+            throw new IllegalStateException("Failed to publish inbound transfer event", e);
         }
     }
 
-    private void publishStatusUpdate(String messageType, String originalMsgId, 
-            String status, String reasonCode) {
+    private void publishStatusUpdate(String messageType, String originalMsgId, String status, String reasonCode) {
         try {
             StatusUpdateEvent event = new StatusUpdateEvent();
             event.eventType = "NPS_STATUS_UPDATE";
@@ -211,16 +218,33 @@ public class NpsCallbackHandler {
 
             String json = objectMapper.writeValueAsString(event);
 
-            var metadata = OutgoingKafkaRecordMetadata.<String>builder()
-                    .withKey(originalMsgId)
-                    .build();
+            var metadata = OutgoingKafkaRecordMetadata.<String>builder().withKey(originalMsgId).build();
 
-            statusUpdateEmitter.send(Message.of(json).addMetadata(metadata));
+            publishAndAwait(statusUpdateEmitter, Message.of(json).addMetadata(metadata));
 
             Log.debugf("Published status update event: %s", originalMsgId);
 
         } catch (Exception e) {
-            Log.error("Failed to publish status update event", e);
+            throw new IllegalStateException("Failed to publish status update event", e);
+        }
+    }
+
+    private void publishAndAwait(Emitter<String> emitter, Message<String> message) {
+        CompletableFuture<Void> acknowledgement = new CompletableFuture<>();
+        emitter.send(message.withAck(() -> {
+            acknowledgement.complete(null);
+            return CompletableFuture.completedFuture(null);
+        }).withNack(failure -> {
+            acknowledgement.completeExceptionally(failure);
+            return CompletableFuture.completedFuture(null);
+        }));
+        try {
+            acknowledgement.get(publishTimeoutMs, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Callback publication interrupted", e);
+        } catch (Exception e) {
+            throw new IllegalStateException("Callback publication was not acknowledged", e);
         }
     }
 
