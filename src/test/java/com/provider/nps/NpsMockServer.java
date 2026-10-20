@@ -30,11 +30,17 @@ public class NpsMockServer implements QuarkusTestResourceLifecycleManager {
         setupPaymentStatusEndpoint();
 
         Map<String, String> config = new HashMap<>();
+        try {
+            config.put("nps.journal.directory",
+                    java.nio.file.Files.createTempDirectory("nps-integration-journal").toString());
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
         config.put("nps.base-url", baseUrl);
         config.put("nps.token-url", baseUrl + "/token");
         config.put("nps.client-id", "test-client");
         config.put("nps.client-secret", "test-secret");
-        config.put("nps.source-id", "000000000000");
+        config.put("nps.source-id", "999057");
         config.put("nps.source-bic", "TESTNGLA");
         config.put("nps.source-name", "TEST BANK LIMITED");
 
@@ -57,12 +63,6 @@ public class NpsMockServer implements QuarkusTestResourceLifecycleManager {
         // Successful name enquiry response (acmt.024)
         String successResponse = """
                 <?xml version="1.0" encoding="UTF-8"?>
-                <BizMsg xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.02">
-                    <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.02">
-                        <BizMsgIdr>RESP12345678901234567890123456789</BizMsgIdr>
-                        <MsgDefIdr>acmt.024.001.03</MsgDefIdr>
-                        <CreDt>2026-08-05T12:00:00+01:00</CreDt>
-                    </AppHdr>
                     <Document xmlns="urn:iso:std:iso:20022:tech:xsd:acmt.024.001.03">
                         <IdVrfctnRpt>
                             <Assgnmt>
@@ -88,12 +88,7 @@ public class NpsMockServer implements QuarkusTestResourceLifecycleManager {
                                     </Pty>
                                     <Acct>
                                         <Id>
-                                            <Othr>
-                                                <Id>0123456789</Id>
-                                                <SchmeNm>
-                                                    <Prtry>ACCT</Prtry>
-                                                </SchmeNm>
-                                            </Othr>
+                                            <IBAN>0123456789</IBAN>
                                         </Id>
                                     </Acct>
                                     <Agt>
@@ -113,10 +108,9 @@ public class NpsMockServer implements QuarkusTestResourceLifecycleManager {
                             </SplmtryData>
                         </IdVrfctnRpt>
                     </Document>
-                </BizMsg>
                 """;
 
-        wireMockServer.stubFor(WireMock.post(WireMock.urlEqualTo("/nps/acmt/023")).willReturn(WireMock.aResponse()
+        wireMockServer.stubFor(WireMock.post(WireMock.urlEqualTo("/nps/acmt")).willReturn(WireMock.aResponse()
                 .withStatus(200).withHeader("Content-Type", "application/xml").withBody(successResponse)));
     }
 
@@ -124,12 +118,6 @@ public class NpsMockServer implements QuarkusTestResourceLifecycleManager {
         // Successful credit transfer response (pacs.002)
         String successResponse = """
                 <?xml version="1.0" encoding="UTF-8"?>
-                <BizMsg xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.02">
-                    <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.02">
-                        <BizMsgIdr>RESP98765432109876543210987654321</BizMsgIdr>
-                        <MsgDefIdr>pacs.002.001.10</MsgDefIdr>
-                        <CreDt>2026-08-05T12:00:00+01:00</CreDt>
-                    </AppHdr>
                     <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
                         <FIToFIPmtStsRpt>
                             <GrpHdr>
@@ -155,23 +143,17 @@ public class NpsMockServer implements QuarkusTestResourceLifecycleManager {
                             </SplmtryData>
                         </FIToFIPmtStsRpt>
                     </Document>
-                </BizMsg>
                 """;
 
-        wireMockServer.stubFor(WireMock.post(WireMock.urlEqualTo("/nps/pacs/008")).willReturn(WireMock.aResponse()
-                .withStatus(200).withHeader("Content-Type", "application/xml").withBody(successResponse)));
+        wireMockServer.stubFor(WireMock.post(WireMock.urlEqualTo("/nps/pacs"))
+                .withRequestBody(WireMock.containing("FIToFICstmrCdtTrf")).willReturn(WireMock.aResponse()
+                        .withStatus(200).withHeader("Content-Type", "application/xml").withBody(successResponse)));
     }
 
     private void setupPaymentStatusEndpoint() {
         // Payment status query response (pacs.002)
         String successResponse = """
                 <?xml version="1.0" encoding="UTF-8"?>
-                <BizMsg xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.02">
-                    <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.02">
-                        <BizMsgIdr>REQRY1234567890123456789012345678</BizMsgIdr>
-                        <MsgDefIdr>pacs.002.001.10</MsgDefIdr>
-                        <CreDt>2026-08-05T12:00:00+01:00</CreDt>
-                    </AppHdr>
                     <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
                         <FIToFIPmtStsRpt>
                             <GrpHdr>
@@ -191,11 +173,11 @@ public class NpsMockServer implements QuarkusTestResourceLifecycleManager {
                             </TxInfAndSts>
                         </FIToFIPmtStsRpt>
                     </Document>
-                </BizMsg>
                 """;
 
-        wireMockServer.stubFor(WireMock.post(WireMock.urlEqualTo("/nps/pacs/028")).willReturn(WireMock.aResponse()
-                .withStatus(200).withHeader("Content-Type", "application/xml").withBody(successResponse)));
+        wireMockServer.stubFor(WireMock.post(WireMock.urlEqualTo("/nps/pacs"))
+                .withRequestBody(WireMock.containing("FIToFIPmtStsReq")).willReturn(WireMock.aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/xml").withBody(successResponse)));
     }
 
     @Override

@@ -1,190 +1,163 @@
 package com.provider.nps.message;
 
+import static com.provider.nps.message.NpsFields.agent;
+import static com.provider.nps.message.NpsFields.member;
+import static com.provider.nps.message.NpsFields.required;
+import static com.provider.nps.message.NpsFields.xml;
+
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.Map;
 
-/**
- * Builder for pacs.008.001.08 - FIToFICustomerCreditTransfer. Used for fund
- * transfers between financial institutions.
- * 
- * This is the primary message for NIP-like bank transfers via NPS.
- */
+/** NIBSS pacs.008.001.12 credit transfer. */
 @ApplicationScoped
 public class Pacs008Builder {
-
-    private static final String NIBSS_BIC = "ABORNGLA";
-
     @Inject
     NpsMessageBuilder baseBuilder;
 
-    /**
-     * Builds a pacs.008 credit transfer message.
-     */
     public String build(CreditTransferRequest request) {
-        String msgId = baseBuilder.getIdGenerator().generateMessageId();
-        String endToEndId = request.getEndToEndId() != null
-                ? request.getEndToEndId()
-                : baseBuilder.getIdGenerator().generateEndToEndId();
-        String txId = baseBuilder.getIdGenerator().generateTransactionId();
-        String creDate = baseBuilder.getIdGenerator().currentTimestamp();
+        String sourceMemberId = member(baseBuilder.getSourceId(), "NPS_SOURCE_ID");
+        member(request.getCreditorBankCode(), "bank_code");
+        account(request.getDebtorAccount(), "debtor_account");
+        account(request.getCreditorAccount(), "account_number");
+        required(request.getDebtorName(), "debtor_name", 100);
+        required(request.getCreditorName(), "account_name", 100);
+        String amount = formatAmount(request.getAmount());
+        Map<String, String> metadata = request.getVerificationDetails();
+        String debtorVerification = buildPartyVerification(metadata, "debtor");
+        String creditorVerification = buildPartyVerification(metadata, "creditor");
+        String nameEnquiryMessageId = required(metadata.get("name_enquiry_msg_id"), "name_enquiry_msg_id", 35);
+        String channelCode = required(metadata.get("channel_code"), "channel_code", 1);
+        if (!channelCode.matches("[0-9]"))
+            throw new IllegalArgumentException("Invalid channel_code");
+        String transactionLocation = required(metadata.get("transaction_location"), "transaction_location", 25);
+        String narration = request.getNarration() == null ? "Fund Transfer" : request.getNarration();
+        if (narration.length() > 100)
+            throw new IllegalArgumentException("narration exceeds 100 characters");
+        String messageId = baseBuilder.getIdGenerator().generateMessageId();
+        String instructionId = baseBuilder.getIdGenerator().generateTransactionId();
+        String endToEndId = request.getEndToEndId() == null
+                ? baseBuilder.getIdGenerator().generateEndToEndId()
+                : required(request.getEndToEndId(), "end_to_end_id", 35);
+        String transactionId = baseBuilder.getIdGenerator().generateTransactionId();
+        String creationTime = baseBuilder.getIdGenerator().currentTimestamp();
         String settlementDate = baseBuilder.getIdGenerator().currentDate();
-
-        String appHdr = baseBuilder.buildAppHdr("pacs.008.001.08", msgId, NIBSS_BIC);
-
-        String document = buildDocument(msgId, endToEndId, txId, creDate, settlementDate, request);
-
-        return baseBuilder.wrapInBizMsg(appHdr, document);
-    }
-
-    private String buildDocument(String msgId, String endToEndId, String txId, String creDate, String settlementDate,
-            CreditTransferRequest request) {
-
-        String formattedAmount = formatAmount(request.getAmount());
-
-        return String.format("""
-                <Document xmlns="%s">
+        String agents = "<InstgAgt>" + agent(sourceMemberId) + "</InstgAgt><InstdAgt>"
+                + agent(request.getCreditorBankCode()) + "</InstdAgt>";
+        String categoryPurpose = request.getCategoryPurpose() == null
+                ? "001"
+                : required(request.getCategoryPurpose(), "category_purpose", 3);
+        String document = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <ns2:Document xmlns:ns2="%s">
                     <FIToFICstmrCdtTrf>
                         <GrpHdr>
                             <MsgId>%s</MsgId>
                             <CreDtTm>%s</CreDtTm>
+                            <BtchBookg>false</BtchBookg>
                             <NbOfTxs>1</NbOfTxs>
-                            <SttlmInf>
-                                <SttlmMtd>CLRG</SttlmMtd>
-                                <ClrSys>
-                                    <Prtry>NPS</Prtry>
-                                </ClrSys>
-                            </SttlmInf>
+                            <SttlmInf><SttlmMtd>CLRG</SttlmMtd></SttlmInf>
+                            %s
                         </GrpHdr>
                         <CdtTrfTxInf>
                             <PmtId>
+                                <InstrId>%s</InstrId>
                                 <EndToEndId>%s</EndToEndId>
                                 <TxId>%s</TxId>
                             </PmtId>
                             <PmtTpInf>
-                                <SvcLvl>
-                                    <Prtry>NURG</Prtry>
-                                </SvcLvl>
-                                <LclInstrm>
-                                    <Prtry>NIP</Prtry>
-                                </LclInstrm>
-                                <CtgyPurp>
-                                    <Prtry>%s</Prtry>
-                                </CtgyPurp>
+                                <ClrChanl>RTNS</ClrChanl>
+                                <SvcLvl><Prtry>0100</Prtry></SvcLvl>
+                                <LclInstrm><Prtry>CTAA</Prtry></LclInstrm>
+                                <CtgyPurp><Prtry>%s</Prtry></CtgyPurp>
                             </PmtTpInf>
                             <IntrBkSttlmAmt Ccy="NGN">%s</IntrBkSttlmAmt>
                             <IntrBkSttlmDt>%s</IntrBkSttlmDt>
                             <ChrgBr>SLEV</ChrgBr>
-                            <InstgAgt>
-                                <FinInstnId>
-                                    <BICFI>%s</BICFI>
-                                </FinInstnId>
-                            </InstgAgt>
-                            <InstdAgt>
-                                <FinInstnId>
-                                    <ClrSysMmbId>
-                                        <ClrSysId>
-                                            <Cd>NGNC</Cd>
-                                        </ClrSysId>
-                                        <MmbId>%s</MmbId>
-                                    </ClrSysMmbId>
-                                </FinInstnId>
-                            </InstdAgt>
-                            <Dbtr>
-                                <Nm>%s</Nm>
-                                <Id>
-                                    <PrvtId>
-                                        <Othr>
-                                            <Id>%s</Id>
-                                            <SchmeNm>
-                                                <Prtry>BVN</Prtry>
-                                            </SchmeNm>
-                                        </Othr>
-                                    </PrvtId>
-                                </Id>
-                            </Dbtr>
-                            <DbtrAcct>
-                                <Id>
-                                    <Othr>
-                                        <Id>%s</Id>
-                                        <SchmeNm>
-                                            <Prtry>ACCT</Prtry>
-                                        </SchmeNm>
-                                    </Othr>
-                                </Id>
-                            </DbtrAcct>
-                            <DbtrAgt>
-                                <FinInstnId>
-                                    <BICFI>%s</BICFI>
-                                </FinInstnId>
-                            </DbtrAgt>
-                            <CdtrAgt>
-                                <FinInstnId>
-                                    <ClrSysMmbId>
-                                        <ClrSysId>
-                                            <Cd>NGNC</Cd>
-                                        </ClrSysId>
-                                        <MmbId>%s</MmbId>
-                                    </ClrSysMmbId>
-                                </FinInstnId>
-                            </CdtrAgt>
-                            <Cdtr>
-                                <Nm>%s</Nm>
-                            </Cdtr>
-                            <CdtrAcct>
-                                <Id>
-                                    <Othr>
-                                        <Id>%s</Id>
-                                        <SchmeNm>
-                                            <Prtry>ACCT</Prtry>
-                                        </SchmeNm>
-                                    </Othr>
-                                </Id>
-                            </CdtrAcct>
-                            <Purp>
-                                <Prtry>%s</Prtry>
-                            </Purp>
-                            <RmtInf>
-                                <Ustrd>%s</Ustrd>
-                            </RmtInf>
-                            <SplmtryData>
-                                <Envlp>
-                                    <ChnlCd>%s</ChnlCd>
-                                    <KycLvl>%s</KycLvl>
-                                    <TxnLoc>%s</TxnLoc>
-                                </Envlp>
-                            </SplmtryData>
+                            %s
+                            <Dbtr><Nm>%s</Nm></Dbtr>
+                            %s
+                            <DbtrAgt>%s</DbtrAgt>
+                            <CdtrAgt>%s</CdtrAgt>
+                            <Cdtr><Nm>%s</Nm></Cdtr>
+                            %s
+                            <RmtInf><Ustrd>%s</Ustrd></RmtInf>
                         </CdtTrfTxInf>
+                        <SplmtryData>
+                            <PlcAndNm>AdditionalVerificationDetails</PlcAndNm>
+                            <Envlp>
+                                <CustomData>
+                                    <DebtorInfo>%s</DebtorInfo>
+                                    <CreditorInfo>%s</CreditorInfo>
+                                    <TransactionInfo>
+                                        <TransactionLocation>%s</TransactionLocation>
+                                        <NameEnquiryMsgId>%s</NameEnquiryMsgId>
+                                        <ChannelCode>%s</ChannelCode>
+                                    </TransactionInfo>
+                                </CustomData>
+                            </Envlp>
+                        </SplmtryData>
                     </FIToFICstmrCdtTrf>
-                </Document>""", NpsMessageBuilder.PACS_008_NS, msgId, creDate, endToEndId, txId,
-                request.getCategoryPurpose() != null ? request.getCategoryPurpose() : "91", // 91 = Transfer
-                formattedAmount, settlementDate, baseBuilder.getSourceBic(), request.getCreditorBankCode(),
-                request.getDebtorName(), request.getDebtorBvn() != null ? request.getDebtorBvn() : "",
-                request.getDebtorAccount(), baseBuilder.getSourceBic(), request.getCreditorBankCode(),
-                request.getCreditorName(), request.getCreditorAccount(),
-                request.getPurposeCode() != null ? request.getPurposeCode() : "OTHR",
-                request.getNarration() != null ? escapeXml(request.getNarration()) : "Fund Transfer",
-                request.getChannelCode() != null ? request.getChannelCode() : "1",
-                request.getKycLevel() != null ? request.getKycLevel() : "3",
-                request.getTransactionLocation() != null ? request.getTransactionLocation() : "6.4300747,3.4110715");
+                </ns2:Document>
+                """.formatted(NpsMessageBuilder.PACS_008_NS, xml(messageId), xml(creationTime), agents,
+                xml(instructionId), xml(endToEndId), xml(transactionId), xml(categoryPurpose), amount,
+                xml(settlementDate), agents, xml(request.getDebtorName()),
+                accountXml("DbtrAcct", request.getDebtorAccount(), request.getDebtorName()), agent(sourceMemberId),
+                agent(request.getCreditorBankCode()), xml(request.getCreditorName()),
+                accountXml("CdtrAcct", request.getCreditorAccount(), request.getCreditorName()), xml(narration),
+                debtorVerification, creditorVerification, xml(transactionLocation), xml(nameEnquiryMessageId),
+                xml(channelCode));
+        // Remove template-only whitespace before signing; never reformat a signed
+        // message.
+        return document.replaceAll(">\\s+<", "><").strip();
     }
 
-    private String formatAmount(BigDecimal amount) {
-        return amount.setScale(2, RoundingMode.HALF_UP).toPlainString();
+    private static String formatAmount(BigDecimal amount) {
+        if (amount == null || amount.signum() <= 0 || amount.precision() - amount.scale() > 16) {
+            throw new IllegalArgumentException("Invalid amount");
+        }
+        try {
+            return amount.setScale(2, RoundingMode.UNNECESSARY).toPlainString();
+        } catch (ArithmeticException exception) {
+            throw new IllegalArgumentException("Amount must have at most two decimal places", exception);
+        }
     }
 
-    private String escapeXml(String text) {
-        if (text == null)
-            return "";
-        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'",
-                "&apos;");
+    private static void account(String value, String name) {
+        required(value, name, 10);
+        if (!value.matches("[0-9]{10}"))
+            throw new IllegalArgumentException(name + " must contain ten digits");
+    }
+    private static String accountXml(String tag, String number, String name) {
+        return "<" + tag + "><Id><IBAN>" + xml(number) + "</IBAN></Id><Nm>" + xml(name) + "</Nm></" + tag + ">";
+    }
+    private static String buildPartyVerification(Map<String, String> metadata, String party) {
+        String designation = required(metadata.get(party + "_account_designation"), party + "_account_designation", 1);
+        String tier = required(metadata.get(party + "_account_tier"), party + "_account_tier", 1);
+        String type = required(metadata.get(party + "_id_type"), party + "_id_type", 7);
+        String value = required(metadata.get(party + "_id_value"), party + "_id_value", 35);
+        if (!designation.matches("[1-6]") || !tier.matches("[1-3]"))
+            throw new IllegalArgumentException("Invalid " + party + " designation or tier");
+        if (!java.util.Set.of("BVN", "NIN", "JTBTIN", "FIRSTIN", "RC").contains(type))
+            throw new IllegalArgumentException("Invalid " + party + "_id_type");
+        if (type.equals("NIN") && !tier.equals("1"))
+            throw new IllegalArgumentException("NIN requires account tier 1");
+        if (java.util.Set.of("JTBTIN", "FIRSTIN", "RC").contains(type) && !designation.equals("1"))
+            throw new IllegalArgumentException("Corporate ID requires corporate account designation 1");
+        return "<AccountDesignation>" + xml(designation) + "</AccountDesignation><IdType>" + xml(type)
+                + "</IdType><IdValue>" + xml(value) + "</IdValue><AccountTier>" + xml(tier) + "</AccountTier>";
     }
 
-    /**
-     * Request data class for credit transfer.
-     */
     public static class CreditTransferRequest {
+        private java.util.Map<String, String> verificationDetails = java.util.Map.of();
+        public void setVerificationDetails(java.util.Map<String, String> values) {
+            verificationDetails = java.util.Map.copyOf(values);
+        }
+        public java.util.Map<String, String> getVerificationDetails() {
+            return verificationDetails;
+        }
         private String endToEndId;
         private BigDecimal amount;
         private String debtorName;

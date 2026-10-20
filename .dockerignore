@@ -1,0 +1,26 @@
+# Only send build inputs to Docker. Runtime credentials are mounted separately.
+.git/
+.github/
+.idea/
+.vscode/
+target/
+logs/
+data/
+.quarkus/
+**/*.log
+**/*.log.*
+**/*.log-*
+**/*.LOG
+**/*.LOG.*
+.env
+.env.*
+keys/
+certs/
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.jks
+**/*.keystore
+# Retain synthetic fixtures so the source tree remains buildable for tests.
+!src/test/resources/test-*.pem

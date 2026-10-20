@@ -18,6 +18,7 @@ class NpsClientTest {
     private HttpServer server;
     private final AtomicInteger refreshes = new AtomicInteger();
     private final List<String> bodies = new ArrayList<>();
+    private final List<String> paths = new ArrayList<>();
 
     @AfterEach
     void stopServer() {
@@ -28,7 +29,8 @@ class NpsClientTest {
 
     private NpsClient client(int status, String body) throws Exception {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.createContext("/nps/pacs/008", exchange -> {
+        server.createContext("/nps/pacs", exchange -> {
+            paths.add(exchange.getRequestURI().getPath());
             bodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(status, bytes.length);
@@ -128,5 +130,25 @@ class NpsClientTest {
         };
         assertThrows(HttpTimeoutException.class, () -> client.sendCreditTransfer("<Request/>"));
         assertEquals(1, bodies.size());
+    }
+    @Test
+    void operationPathCanBeConfiguredWithoutChangingSharedDefault() throws Exception {
+        var client = client(200, "<Document><GrpSts>ACSC</GrpSts></Document>");
+        assertTrue(client.sendCreditTransfer("<Request/>").isTransactionSuccessful());
+        client.creditTransferPath = "/nps/pacs/008";
+        assertTrue(client.sendCreditTransfer("<Request/>").isTransactionSuccessful());
+        assertEquals(List.of("/nps/pacs", "/nps/pacs/008"), paths);
+    }
+    @Test
+    void contradictoryAuthorizationDoesNotConfirmAnOutcome() {
+        for (String values : new String[]{"ACSC NAUT", "ACSC NOAN", "ACSC UNKNOWN", "RJCT AUTH"}) {
+            var pair = values.split(" ");
+            var response = new NpsClient.NpsResponse();
+            response.setSuccess(true);
+            response.setResponseCode(pair[0]);
+            response.setStatusId(pair[1]);
+            assertFalse(response.isTransactionSuccessful());
+            assertFalse(response.isTransactionRejected());
+        }
     }
 }

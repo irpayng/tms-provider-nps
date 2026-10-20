@@ -35,6 +35,9 @@
     <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-rest-jackson</artifactId></dependency>
     <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-rest-client-jackson</artifactId></dependency>
 
+    <!-- OpenAPI specification and interactive Swagger UI -->
+    <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-smallrye-openapi</artifactId></dependency>
+
     <!-- gRPC -->
     <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-grpc</artifactId></dependency>
 

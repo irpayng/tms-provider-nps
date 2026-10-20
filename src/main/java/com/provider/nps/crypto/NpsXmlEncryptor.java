@@ -1,285 +1,148 @@
 package com.provider.nps.crypto;
 
 import com.provider.nps.xml.NpsXml;
-import io.quarkus.logging.Log;
 import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
-import java.io.StringReader;
 import java.io.StringWriter;
 import java.security.PrivateKey;
 import java.security.PublicKey;
-import java.security.SecureRandom;
-import java.security.cert.X509Certificate;
-import java.util.Base64;
-import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
-import javax.crypto.SecretKey;
-import javax.crypto.spec.GCMParameterSpec;
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.transform.OutputKeys;
-import javax.xml.transform.Transformer;
 import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
+import org.apache.xml.security.encryption.XMLCipher;
+import org.apache.xml.security.keys.KeyInfo;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
-import org.w3c.dom.NodeList;
-import org.xml.sax.InputSource;
+import org.w3c.dom.Node;
 
 /**
- * NPS XML Encryption utility. Implements AES-256-GCM content encryption with
- * RSA-OAEP key wrapping as per NPS spec.
- * 
- * Uses W3C XML Encryption standard (xenc namespace).
+ * NIBSS message-content encryption: AES-256-GCM, RSA-OAEP with SHA-1/MGF1-SHA1.
  */
 @ApplicationScoped
 public class NpsXmlEncryptor {
-
-    private static final String XENC_NS = "http://www.w3.org/2001/04/xmlenc#";
-    private static final String DSIG_NS = "http://www.w3.org/2000/09/xmldsig#";
-    private static final int GCM_IV_LENGTH = 12; // 96 bits
-    private static final int GCM_TAG_LENGTH = 128; // 128 bits
-
+    private static final String XENC = "http://www.w3.org/2001/04/xmlenc#";
+    private static final String DSIG = "http://www.w3.org/2000/09/xmldsig#";
     @ConfigProperty(name = "nps.private-key-path")
     String privateKeyPath;
-
     @ConfigProperty(name = "nps.nibss-public-key-path")
     String nibssPublicKeyPath;
-
     @ConfigProperty(name = "nps.certificate-path")
     String certificatePath;
-
     private PrivateKey privateKey;
     private PublicKey nibssPublicKey;
-    private X509Certificate certificate;
-    private DocumentBuilderFactory documentBuilderFactory;
-    private SecureRandom secureRandom;
 
     @PostConstruct
     void init() {
-        try {
-            documentBuilderFactory = NpsXml.newDocumentBuilderFactory();
-            secureRandom = new SecureRandom();
-
-            loadKeys();
-            Log.info("NpsXmlEncryptor initialized successfully");
-        } catch (Exception e) {
-            Log.error("Failed to initialize NpsXmlEncryptor", e);
-            throw new RuntimeException("Failed to initialize NpsXmlEncryptor", e);
-        }
+        org.apache.xml.security.Init.init();
+        reloadKeys();
     }
 
-    private void loadKeys() throws Exception {
-        privateKey = NpsPemKeys.privateKey(privateKeyPath);
-        nibssPublicKey = NpsPemKeys.publicKey(nibssPublicKeyPath);
-        certificate = NpsPemKeys.certificate(certificatePath);
-    }
-
-    /**
-     * Encrypts the Document element of an ISO 20022 message. Uses AES-256-GCM for
-     * content and RSA-OAEP for key wrapping.
-     * 
-     * @param xml
-     *            The signed XML message to encrypt
-     * @return The encrypted XML message with EncryptedData structure
-     */
-    public String encrypt(String xml) throws Exception {
-        DocumentBuilder builder = documentBuilderFactory.newDocumentBuilder();
-        Document document = builder.parse(new InputSource(new StringReader(xml)));
-
-        // Find the Document element (the business message payload)
-        NodeList docList = document.getElementsByTagNameNS("*", "Document");
-        if (docList.getLength() == 0) {
-            throw new IllegalArgumentException("XML does not contain Document element");
-        }
-        Element docElement = (Element) docList.item(0);
-
-        // Serialize Document element to encrypt
-        String docXml = elementToString(docElement);
-        byte[] plaintext = docXml.getBytes("UTF-8");
-
-        // Generate random AES-256 key
-        KeyGenerator keyGen = KeyGenerator.getInstance("AES");
-        keyGen.init(256, secureRandom);
-        SecretKey aesKey = keyGen.generateKey();
-
-        // Generate random IV for GCM
-        byte[] iv = new byte[GCM_IV_LENGTH];
-        secureRandom.nextBytes(iv);
-
-        // Encrypt content with AES-256-GCM
-        Cipher aesCipher = Cipher.getInstance("AES/GCM/NoPadding");
-        GCMParameterSpec gcmSpec = new GCMParameterSpec(GCM_TAG_LENGTH, iv);
-        aesCipher.init(Cipher.ENCRYPT_MODE, aesKey, gcmSpec);
-        byte[] ciphertext = aesCipher.doFinal(plaintext);
-
-        // Combine IV + ciphertext (NPS expects IV prepended)
-        byte[] ivAndCiphertext = new byte[iv.length + ciphertext.length];
-        System.arraycopy(iv, 0, ivAndCiphertext, 0, iv.length);
-        System.arraycopy(ciphertext, 0, ivAndCiphertext, iv.length, ciphertext.length);
-
-        // Wrap AES key with RSA-OAEP using NIBSS public key
-        Cipher rsaCipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding");
-        rsaCipher.init(Cipher.WRAP_MODE, nibssPublicKey);
-        byte[] wrappedKey = rsaCipher.wrap(aesKey);
-
-        // Build EncryptedData XML structure
-        Element encryptedData = buildEncryptedDataElement(document, ivAndCiphertext, wrappedKey);
-
-        // Replace Document element with EncryptedData
-        docElement.getParentNode().replaceChild(encryptedData, docElement);
-
-        return documentToString(document);
-    }
-
-    private Element buildEncryptedDataElement(Document doc, byte[] encryptedContent, byte[] wrappedKey) {
-        // Create EncryptedData root
-        Element encryptedData = doc.createElementNS(XENC_NS, "xenc:EncryptedData");
-        encryptedData.setAttribute("Type", "http://www.w3.org/2001/04/xmlenc#Content");
-
-        // EncryptionMethod (AES-256-GCM)
-        Element encMethod = doc.createElementNS(XENC_NS, "xenc:EncryptionMethod");
-        encMethod.setAttribute("Algorithm", "http://www.w3.org/2009/xmlenc11#aes256-gcm");
-        encryptedData.appendChild(encMethod);
-
-        // KeyInfo with EncryptedKey
-        Element keyInfo = doc.createElementNS(DSIG_NS, "ds:KeyInfo");
-
-        Element encryptedKey = doc.createElementNS(XENC_NS, "xenc:EncryptedKey");
-
-        // Key encryption method (RSA-OAEP)
-        Element keyEncMethod = doc.createElementNS(XENC_NS, "xenc:EncryptionMethod");
-        keyEncMethod.setAttribute("Algorithm", "http://www.w3.org/2001/04/xmlenc#rsa-oaep-mgf1p");
-
-        // DigestMethod for OAEP
-        Element digestMethod = doc.createElementNS(DSIG_NS, "ds:DigestMethod");
-        digestMethod.setAttribute("Algorithm", "http://www.w3.org/2001/04/xmlenc#sha256");
-        keyEncMethod.appendChild(digestMethod);
-
-        encryptedKey.appendChild(keyEncMethod);
-
-        // CipherData for wrapped key
-        Element keyCipherData = doc.createElementNS(XENC_NS, "xenc:CipherData");
-        Element keyCipherValue = doc.createElementNS(XENC_NS, "xenc:CipherValue");
-        keyCipherValue.setTextContent(Base64.getEncoder().encodeToString(wrappedKey));
-        keyCipherData.appendChild(keyCipherValue);
-        encryptedKey.appendChild(keyCipherData);
-
-        keyInfo.appendChild(encryptedKey);
-        encryptedData.appendChild(keyInfo);
-
-        // CipherData for encrypted content
-        Element cipherData = doc.createElementNS(XENC_NS, "xenc:CipherData");
-        Element cipherValue = doc.createElementNS(XENC_NS, "xenc:CipherValue");
-        cipherValue.setTextContent(Base64.getEncoder().encodeToString(encryptedContent));
-        cipherData.appendChild(cipherValue);
-        encryptedData.appendChild(cipherData);
-
-        return encryptedData;
-    }
-
-    /**
-     * Decrypts an incoming NPS message containing EncryptedData.
-     * 
-     * @param xml
-     *            The encrypted XML message
-     * @return The decrypted XML message with Document element restored
-     */
-    public String decrypt(String xml) throws Exception {
-        DocumentBuilder builder = documentBuilderFactory.newDocumentBuilder();
-        Document document = builder.parse(new InputSource(new StringReader(xml)));
-
-        // Find EncryptedData element
-        NodeList encDataList = document.getElementsByTagNameNS(XENC_NS, "EncryptedData");
-        if (encDataList.getLength() == 0) {
-            // No encryption, return as-is
-            Log.debug("No EncryptedData found, returning original XML");
-            return xml;
-        }
-
-        Element encryptedData = (Element) encDataList.item(0);
-
-        // Extract wrapped key
-        NodeList keyCipherList = encryptedData.getElementsByTagNameNS(XENC_NS, "EncryptedKey");
-        if (keyCipherList.getLength() == 0) {
-            throw new IllegalArgumentException("EncryptedData does not contain EncryptedKey");
-        }
-
-        Element encryptedKey = (Element) keyCipherList.item(0);
-        NodeList keyValueList = encryptedKey.getElementsByTagNameNS(XENC_NS, "CipherValue");
-        String wrappedKeyBase64 = keyValueList.item(0).getTextContent().trim();
-        byte[] wrappedKey = Base64.getDecoder().decode(wrappedKeyBase64);
-
-        // Unwrap AES key using our private key
-        Cipher rsaCipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding");
-        rsaCipher.init(Cipher.UNWRAP_MODE, privateKey);
-        SecretKey aesKey = (SecretKey) rsaCipher.unwrap(wrappedKey, "AES", Cipher.SECRET_KEY);
-
-        // Extract encrypted content
-        NodeList cipherDataList = encryptedData.getElementsByTagNameNS(XENC_NS, "CipherData");
-        // Get the second CipherValue (first is for key, second is for content)
-        NodeList cipherValueList = encryptedData.getElementsByTagNameNS(XENC_NS, "CipherValue");
-        String encryptedContentBase64 = cipherValueList.item(cipherValueList.getLength() - 1).getTextContent().trim();
-        byte[] ivAndCiphertext = Base64.getDecoder().decode(encryptedContentBase64);
-
-        // Split IV and ciphertext
-        byte[] iv = new byte[GCM_IV_LENGTH];
-        byte[] ciphertext = new byte[ivAndCiphertext.length - GCM_IV_LENGTH];
-        System.arraycopy(ivAndCiphertext, 0, iv, 0, GCM_IV_LENGTH);
-        System.arraycopy(ivAndCiphertext, GCM_IV_LENGTH, ciphertext, 0, ciphertext.length);
-
-        // Decrypt with AES-256-GCM
-        Cipher aesCipher = Cipher.getInstance("AES/GCM/NoPadding");
-        GCMParameterSpec gcmSpec = new GCMParameterSpec(GCM_TAG_LENGTH, iv);
-        aesCipher.init(Cipher.DECRYPT_MODE, aesKey, gcmSpec);
-        byte[] plaintext = aesCipher.doFinal(ciphertext);
-
-        // Parse decrypted Document element
-        String decryptedDocXml = new String(plaintext, "UTF-8");
-        Document decryptedDoc = builder.parse(new InputSource(new StringReader(decryptedDocXml)));
-        Element decryptedElement = decryptedDoc.getDocumentElement();
-
-        // Import and replace EncryptedData with decrypted Document
-        Element importedElement = (Element) document.importNode(decryptedElement, true);
-        encryptedData.getParentNode().replaceChild(importedElement, encryptedData);
-
-        return documentToString(document);
-    }
-
-    private String elementToString(Element element) throws Exception {
-        TransformerFactory transformerFactory = TransformerFactory.newInstance();
-        Transformer transformer = transformerFactory.newTransformer();
-        transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "yes");
-        transformer.setOutputProperty(OutputKeys.INDENT, "no");
-
-        StringWriter writer = new StringWriter();
-        transformer.transform(new DOMSource(element), new StreamResult(writer));
-        return writer.toString();
-    }
-
-    private String documentToString(Document document) throws Exception {
-        TransformerFactory transformerFactory = TransformerFactory.newInstance();
-        Transformer transformer = transformerFactory.newTransformer();
-        transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "yes");
-        transformer.setOutputProperty(OutputKeys.INDENT, "no");
-
-        StringWriter writer = new StringWriter();
-        transformer.transform(new DOMSource(document), new StreamResult(writer));
-        return writer.toString();
-    }
-
-    /**
-     * Reloads keys from disk. Call after key rotation.
-     */
     public void reloadKeys() {
         try {
-            loadKeys();
-            Log.info("NPS encryption keys reloaded successfully");
+            privateKey = NpsPemKeys.privateKey(privateKeyPath);
+            nibssPublicKey = NpsPemKeys.publicKey(nibssPublicKeyPath);
         } catch (Exception e) {
-            Log.error("Failed to reload NPS encryption keys", e);
-            throw new RuntimeException("Failed to reload NPS encryption keys", e);
+            throw new IllegalStateException("Failed to load NPS encryption keys", e);
         }
+    }
+
+    public String encrypt(String xml) throws Exception {
+        Document document = NpsXml.parse(xml);
+        Element business = businessElement(document);
+        if (document.getElementsByTagNameNS(XENC, "EncryptedData").getLength() != 0)
+            throw new IllegalArgumentException("Message is already encrypted");
+        KeyGenerator generator = KeyGenerator.getInstance("AES");
+        generator.init(256);
+        var sessionKey = generator.generateKey();
+        XMLCipher wrapping = XMLCipher.getInstance(XMLCipher.RSA_OAEP);
+        wrapping.init(XMLCipher.WRAP_MODE, nibssPublicKey);
+        var wrappedKey = wrapping.encryptKey(document, sessionKey);
+        XMLCipher cipher = XMLCipher.getInstance(XMLCipher.AES_256_GCM);
+        cipher.init(XMLCipher.ENCRYPT_MODE, sessionKey);
+        KeyInfo keyInfo = new KeyInfo(document);
+        keyInfo.add(wrappedKey);
+        cipher.getEncryptedData().setKeyInfo(keyInfo);
+        // Content mode preserves Document, business element, and sibling Signature.
+        cipher.doFinal(document, business, true);
+        return serialize(document);
+    }
+
+    public String decrypt(String xml) throws Exception {
+        Document document = NpsXml.parse(xml);
+        var encrypted = document.getElementsByTagNameNS(XENC, "EncryptedData");
+        if (encrypted.getLength() == 0)
+            return xml;
+        if (encrypted.getLength() != 1)
+            throw new IllegalArgumentException("Expected one encrypted business payload");
+        Element data = (Element) encrypted.item(0);
+        if (data.getElementsByTagNameNS(XENC, "EncryptedKey").getLength() != 1
+                || data.getElementsByTagNameNS(XENC, "CipherValue").getLength() != 2
+                || data.getElementsByTagNameNS(XENC, "CipherReference").getLength() != 0
+                || data.getElementsByTagNameNS(DSIG, "RetrievalMethod").getLength() != 0)
+            throw new IllegalArgumentException("Expected inline encrypted key and payload values");
+        Element business = businessElement(document);
+        if (data.getParentNode() != business)
+            throw new IllegalArgumentException("EncryptedData must be inside the business element");
+        if (!(XENC + "Content").equals(data.getAttribute("Type")))
+            throw new IllegalArgumentException("Expected XML Encryption content mode");
+        var methods = data.getElementsByTagNameNS(XENC, "EncryptionMethod");
+        if (methods.getLength() != 2
+                || !XMLCipher.AES_256_GCM.equals(((Element) methods.item(0)).getAttribute("Algorithm"))
+                || !XMLCipher.RSA_OAEP.equals(((Element) methods.item(1)).getAttribute("Algorithm")))
+            throw new IllegalArgumentException("Unsupported NPS encryption algorithms");
+        // An omitted DigestMethod means SHA-1 for rsa-oaep-mgf1p, as in the endpoint
+        // samples.
+        var digests = data.getElementsByTagNameNS(DSIG, "DigestMethod");
+        if (digests.getLength() > 1 || (digests.getLength() == 1
+                && !(DSIG + "sha1").equals(((Element) digests.item(0)).getAttribute("Algorithm"))))
+            throw new IllegalArgumentException("Unsupported OAEP digest");
+        XMLCipher cipher = XMLCipher.getInstance();
+        cipher.init(XMLCipher.DECRYPT_MODE, null);
+        cipher.setKEK(privateKey);
+        cipher.doFinal(document, data);
+        return serialize(document);
+    }
+
+    private Element businessElement(Document document) {
+        Element container = document.getDocumentElement();
+        if ("BizMsg".equals(container.getLocalName()) || "BizMsg".equals(container.getNodeName())) {
+            Element payload = null;
+            for (Node child = container.getFirstChild(); child != null; child = child.getNextSibling()) {
+                if (child instanceof Element e && "Document".equals(e.getLocalName())) {
+                    if (payload != null)
+                        throw new IllegalArgumentException("Multiple Documents");
+                    payload = e;
+                }
+            }
+            if (payload == null)
+                throw new IllegalArgumentException("Missing Document");
+            container = payload;
+        }
+        if (!"Document".equals(container.getLocalName()) && !"Document".equals(container.getNodeName()))
+            throw new IllegalArgumentException("Expected Document container");
+        Element business = null;
+        for (Node child = container.getFirstChild(); child != null; child = child.getNextSibling()) {
+            if (child instanceof Element element && !DSIG.equals(element.getNamespaceURI())) {
+                if (business != null)
+                    throw new IllegalArgumentException("Multiple business elements");
+                business = element;
+            }
+        }
+        if (business == null)
+            throw new IllegalArgumentException("Missing business element");
+        return business;
+    }
+
+    private String serialize(Document document) throws Exception {
+        var transformer = TransformerFactory.newInstance().newTransformer();
+        transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "no");
+        transformer.setOutputProperty(OutputKeys.INDENT, "no");
+        transformer.setOutputProperty(OutputKeys.ENCODING, "UTF-8");
+        StringWriter output = new StringWriter();
+        transformer.transform(new DOMSource(document), new StreamResult(output));
+        return output.toString();
     }
 }

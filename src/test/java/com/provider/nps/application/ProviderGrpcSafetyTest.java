@@ -1,9 +1,12 @@
-package com.provider.nps.grpc;
+package com.provider.nps.application;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.provider.nps.client.NpsClient;
 import com.provider.nps.client.NpsClient.NpsResponse;
+import com.provider.nps.grpc.ProviderExecuteRequest;
+import com.provider.nps.grpc.ProviderExecuteResponse;
+import com.provider.nps.grpc.ProviderGrpcService;
 import com.provider.nps.logging.NpsTransactionLogger;
 import com.provider.nps.message.NpsResponseParser;
 import com.provider.nps.message.Pacs008Builder;
@@ -16,11 +19,15 @@ import org.junit.jupiter.api.Test;
 
 class ProviderGrpcSafetyTest {
     private static final String TRANSFER_XML = """
-            <BizMsg><Document><FIToFICstmrCdtTrf><GrpHdr><MsgId>original-id</MsgId></GrpHdr>
-            </FIToFICstmrCdtTrf></Document></BizMsg>
+            <Document><FIToFICstmrCdtTrf><GrpHdr><MsgId>original-id</MsgId><CreDtTm>2026-10-17T10:00:00Z</CreDtTm></GrpHdr>
+                <CdtTrfTxInf><PmtId><TxId>tx-id</TxId><EndToEndId>e2e-id</EndToEndId></PmtId>
+                    <IntrBkSttlmDt>2026-10-17</IntrBkSttlmDt>
+                    <InstgAgt><FinInstnId><ClrSysMmbId><MmbId>999057</MmbId></ClrSysMmbId></FinInstnId></InstgAgt>
+                </CdtTrfTxInf>
+            </FIToFICstmrCdtTrf></Document>
             """;
 
-    private ProviderGrpcService service(String status, boolean trustedResponse) {
+    private NpsOperations service(String status, boolean trustedResponse) {
         var response = new NpsResponse();
         response.setSuccess(trustedResponse);
         response.setHttpStatus(200);
@@ -32,7 +39,13 @@ class ProviderGrpcSafetyTest {
                     <TxInfAndSts><TxSts>%s</TxSts></TxInfAndSts>
                 </FIToFIPmtStsRpt></Document></BizMsg>
                 """.formatted(status));
-        var service = new ProviderGrpcService();
+        var service = new NpsOperations();
+        try {
+            service.journal = new com.provider.nps.internal.AdapterJournal(
+                    java.nio.file.Files.createTempDirectory("nps-operation-test"));
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
         service.npsClient = new NpsClient() {
             @Override
             public NpsResponse sendCreditTransfer(String xml) {
@@ -51,9 +64,8 @@ class ProviderGrpcSafetyTest {
         };
         service.pacs028Builder = new Pacs028Builder() {
             @Override
-            public String build(String originalMsgId, String originalEndToEndId) {
-                assertEquals("original-id", originalMsgId);
-                assertEquals("", originalEndToEndId);
+            public String build(PaymentStatusRequest request) {
+                assertEquals("original-id", request.getOriginalMsgId());
                 return "<Request/>";
             }
         };
@@ -70,15 +82,21 @@ class ProviderGrpcSafetyTest {
     }
 
     private ProviderExecuteRequest transfer(double amount) {
-        return ProviderExecuteRequest.newBuilder().setAction("bank-transfer").setReference("internal-ref")
+        return ProviderExecuteRequest.newBuilder().setAction("bank-transfer")
+                .putMetadata("debtor_account_designation", "2").putMetadata("debtor_account_tier", "3")
+                .putMetadata("debtor_id_type", "BVN").putMetadata("debtor_id_value", "22123456789")
+                .putMetadata("creditor_account_designation", "2").putMetadata("creditor_account_tier", "3")
+                .putMetadata("creditor_id_type", "BVN").putMetadata("creditor_id_value", "22987654321")
+                .putMetadata("name_enquiry_msg_id", "ENQUIRY123").putMetadata("channel_code", "1")
+                .putMetadata("transaction_location", "01080652440N020900337921E").setReference("internal-ref")
                 .setAmount(amount).putAllMetadata(Map.of("account_number", "0123456789", "account_name", "Receiver",
                         "bank_code", "000013", "debtor_name", "Sender", "debtor_account", "9876543210"))
                 .build();
     }
 
-    private ProviderExecuteResponse execute(ProviderGrpcService service, ProviderExecuteRequest request) {
+    private ProviderExecuteResponse execute(NpsOperations service, ProviderExecuteRequest request) {
         var result = new AtomicReference<ProviderExecuteResponse>();
-        service.execute(request, new StreamObserver<>() {
+        new ProviderGrpcService(service).execute(request, new StreamObserver<>() {
             @Override
             public void onNext(ProviderExecuteResponse value) {
                 result.set(value);
@@ -92,6 +110,41 @@ class ProviderGrpcSafetyTest {
             }
         });
         return result.get();
+    }
+
+    @Test
+    void repeatedTransfersReplayAndConflictingReferencesNeverSend() {
+        var service = service("ACSP", true);
+        var originalClient = service.npsClient;
+        var sends = new java.util.concurrent.atomic.AtomicInteger();
+        service.npsClient = new NpsClient() {
+            @Override
+            public NpsResponse sendCreditTransfer(String xml) throws Exception {
+                sends.incrementAndGet();
+                return originalClient.sendCreditTransfer(xml);
+            }
+        };
+        assertEquals("success", execute(service, transfer(100)).getStatus());
+        assertEquals("success", execute(service, transfer(100)).getStatus());
+        assertEquals("IDEMPOTENCY_CONFLICT", execute(service, transfer(200)).getResponseCode());
+        assertEquals(1, sends.get());
+    }
+    @Test
+    void timeoutIsReplayedWithoutResubmitting() {
+        var service = service("", false);
+        var sends = new java.util.concurrent.atomic.AtomicInteger();
+        service.npsClient = new NpsClient() {
+            @Override
+            public NpsResponse sendCreditTransfer(String xml) throws Exception {
+                sends.incrementAndGet();
+                throw new HttpTimeoutException("No response");
+            }
+        };
+        assertEquals("pending", execute(service, transfer(100)).getStatus());
+        var replay = execute(service, transfer(100));
+        assertEquals("pending", replay.getStatus());
+        assertEquals("original-id", replay.getProviderReference());
+        assertEquals(1, sends.get());
     }
 
     @Test
@@ -129,12 +182,19 @@ class ProviderGrpcSafetyTest {
         var response = execute(service, transfer(100));
         assertEquals("pending", response.getStatus());
         assertEquals("original-id", response.getProviderReference());
+        assertTrue(response.getDataJson().contains("\"original_tx_id\":\"tx-id\""));
+        assertTrue(response.getDataJson().contains("\"original_creation_time\":\"2026-10-17T10:00:00Z\""));
+        assertTrue(response.getDataJson().contains("\"original_instructing_agent\":\"999057\""));
     }
 
     @Test
     void requeryNeverConfirmsFinality() {
-        var request = ProviderExecuteRequest.newBuilder().setAction("requery").setReference("internal-ref")
-                .putMetadata("original_msg_id", "original-id").build();
+        var request = ProviderExecuteRequest.newBuilder().setAction("requery")
+                .putMetadata("original_tx_id", "ORIGINAL_TX_123")
+                .putMetadata("original_creation_time", "2026-10-17T10:00:00Z")
+                .putMetadata("original_settlement_date", "2026-10-17")
+                .putMetadata("original_instructing_agent", "999057").putMetadata("original_instructed_agent", "000013")
+                .setReference("internal-ref").putMetadata("original_msg_id", "original-id").build();
         for (String status : new String[]{"ACSP", "ACSC", "RJCT"}) {
             var response = execute(service(status, true), request);
             assertEquals("pending", response.getStatus());
@@ -145,7 +205,12 @@ class ProviderGrpcSafetyTest {
 
     @Test
     void requeryDoesNotInventOriginalIdentifiersFromReference() {
-        var request = ProviderExecuteRequest.newBuilder().setAction("requery").setReference("internal-ref").build();
+        var request = ProviderExecuteRequest.newBuilder().setAction("requery")
+                .putMetadata("original_tx_id", "ORIGINAL_TX_123")
+                .putMetadata("original_creation_time", "2026-10-17T10:00:00Z")
+                .putMetadata("original_settlement_date", "2026-10-17")
+                .putMetadata("original_instructing_agent", "999057").putMetadata("original_instructed_agent", "000013")
+                .setReference("internal-ref").build();
         assertEquals("failed", execute(service("ACSP", true), request).getStatus());
     }
 

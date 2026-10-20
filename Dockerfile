@@ -16,7 +16,7 @@ COPY src/ src/
 RUN ./mvnw package -DskipTests -B
 
 # Runtime stage
-FROM eclipse-temurin:21-jre-alpine
+FROM eclipse-temurin:21-jre-alpine AS production
 WORKDIR /app
 
 # Create non-root user

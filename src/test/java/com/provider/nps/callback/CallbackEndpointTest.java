@@ -19,8 +19,7 @@ class CallbackEndpointTest {
     void testInboundCreditTransfer() {
         String inboundTransfer = """
                 <?xml version="1.0" encoding="UTF-8"?>
-                <BizMsg xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.02">
-                    <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
+                    <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.12">
                         <FIToFICstmrCdtTrf>
                             <GrpHdr>
                                 <MsgId>INBOUND123456789012345678901234</MsgId>
@@ -36,7 +35,7 @@ class CallbackEndpointTest {
                                     <Nm>SENDER NAME</Nm>
                                 </Dbtr>
                                 <DbtrAcct>
-                                    <Id><Othr><Id>1234567890</Id></Othr></Id>
+                                    <Id><IBAN>1234567890</IBAN></Id>
                                 </DbtrAcct>
                                 <DbtrAgt>
                                     <FinInstnId><BICFI>SENDERNGLA</BICFI></FinInstnId>
@@ -45,7 +44,7 @@ class CallbackEndpointTest {
                                     <Nm>RECEIVER NAME</Nm>
                                 </Cdtr>
                                 <CdtrAcct>
-                                    <Id><Othr><Id>0987654321</Id></Othr></Id>
+                                    <Id><IBAN>0987654321</IBAN></Id>
                                 </CdtrAcct>
                                 <RmtInf>
                                     <Ustrd>Payment for services</Ustrd>
@@ -53,11 +52,15 @@ class CallbackEndpointTest {
                             </CdtTrfTxInf>
                         </FIToFICstmrCdtTrf>
                     </Document>
-                </BizMsg>
                 """;
 
-        given().contentType("application/xml").body(inboundTransfer).when().post("/nps/callback/pacs008").then()
-                .statusCode(200).contentType(containsString("xml"));
+        String response = given().contentType("application/xml").body(inboundTransfer).when()
+                .post("/nps/callback/pacs008").then().statusCode(200).contentType(containsString("xml")).extract()
+                .asString();
+        String responseId = com.provider.nps.xml.NpsXml.text(com.provider.nps.xml.NpsXml.parse(response),
+                "BizMsg/Document/FIToFIPmtStsRpt/GrpHdr/MsgId");
+        org.junit.jupiter.api.Assertions.assertTrue(responseId.matches("999057[0-9]{29}"));
+        org.junit.jupiter.api.Assertions.assertFalse(response.contains("\n"));
     }
 
     @Test
@@ -65,7 +68,6 @@ class CallbackEndpointTest {
     void testPaymentStatusCallback() {
         String statusNotification = """
                 <?xml version="1.0" encoding="UTF-8"?>
-                <BizMsg xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.02">
                     <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
                         <FIToFIPmtStsRpt>
                             <GrpHdr>
@@ -81,7 +83,6 @@ class CallbackEndpointTest {
                             </TxInfAndSts>
                         </FIToFIPmtStsRpt>
                     </Document>
-                </BizMsg>
                 """;
 
         given().contentType("application/xml").body(statusNotification).when().post("/nps/callback/pacs002").then()
@@ -93,7 +94,6 @@ class CallbackEndpointTest {
     void testInboundNameEnquiry() {
         String nameEnquiry = """
                 <?xml version="1.0" encoding="UTF-8"?>
-                <BizMsg xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.02">
                     <Document xmlns="urn:iso:std:iso:20022:tech:xsd:acmt.023.001.03">
                         <IdVrfctnReq>
                             <Assgnmt>
@@ -122,7 +122,6 @@ class CallbackEndpointTest {
                             </SplmtryData>
                         </IdVrfctnReq>
                     </Document>
-                </BizMsg>
                 """;
 
         given().contentType("application/xml").body(nameEnquiry).when().post("/nps/callback/acmt023").then()
@@ -134,7 +133,6 @@ class CallbackEndpointTest {
     void testNameEnquiryResponse() {
         String nameEnquiryResponse = """
                 <?xml version="1.0" encoding="UTF-8"?>
-                <BizMsg xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.02">
                     <Document xmlns="urn:iso:std:iso:20022:tech:xsd:acmt.024.001.03">
                         <IdVrfctnRpt>
                             <Assgnmt>
@@ -150,7 +148,6 @@ class CallbackEndpointTest {
                             </Rpt>
                         </IdVrfctnRpt>
                     </Document>
-                </BizMsg>
                 """;
 
         given().contentType("application/xml").body(nameEnquiryResponse).when().post("/nps/callback/acmt024").then()
@@ -162,7 +159,6 @@ class CallbackEndpointTest {
     void testPaymentInitiationStatus() {
         String painStatus = """
                 <?xml version="1.0" encoding="UTF-8"?>
-                <BizMsg xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.02">
                     <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.002.001.10">
                         <CstmrPmtStsRpt>
                             <GrpHdr>
@@ -179,10 +175,16 @@ class CallbackEndpointTest {
                             </OrgnlPmtInfAndSts>
                         </CstmrPmtStsRpt>
                     </Document>
-                </BizMsg>
                 """;
 
         given().contentType("application/xml").body(painStatus).when().post("/nps/callback/pain002").then()
                 .statusCode(200);
+    }
+    @Test
+    void malformedReportsAreRejected() {
+        for (String endpoint : new String[]{"pacs002", "acmt024", "pain002"}) {
+            given().contentType("application/xml").body("<Wrapper><Document/></Wrapper>").when()
+                    .post("/nps/callback/" + endpoint).then().statusCode(400);
+        }
     }
 }

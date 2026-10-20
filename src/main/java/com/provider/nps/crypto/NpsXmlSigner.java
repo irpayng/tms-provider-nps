@@ -44,7 +44,7 @@ import org.xml.sax.InputSource;
  * NPS XML Digital Signature utility. Implements W3C XMLDSIG with RSA-SHA256 as
  * per NPS integration spec.
  * 
- * Signature is enveloped within the AppHdr/Sgntr element.
+ * Signature is enveloped within the Document element.
  */
 @ApplicationScoped
 public class NpsXmlSigner {
@@ -91,7 +91,7 @@ public class NpsXmlSigner {
 
     /**
      * Signs an ISO 20022 XML message with enveloped W3C XMLDSIG signature. The
-     * signature is placed in AppHdr/Sgntr as per NPS spec.
+     * signature is placed in Document as per NPS spec.
      * 
      * @param xml
      *            The unsigned XML message
@@ -101,20 +101,14 @@ public class NpsXmlSigner {
         DocumentBuilder builder = documentBuilderFactory.newDocumentBuilder();
         Document document = builder.parse(new InputSource(new StringReader(xml)));
 
-        // Find the AppHdr element to add signature
-        NodeList appHdrList = document.getElementsByTagNameNS("*", "AppHdr");
-        if (appHdrList.getLength() == 0) {
-            throw new IllegalArgumentException("XML does not contain AppHdr element");
+        Element root = document.getDocumentElement();
+        if (!"Document".equals(root.getLocalName()) && !"BizMsg".equals(root.getLocalName())) {
+            throw new IllegalArgumentException("Expected ISO 20022 Document or legacy BizMsg root");
         }
-        Element appHdr = (Element) appHdrList.item(0);
-
-        // Create or find Sgntr element
-        Element sgntr = findOrCreateSgntrElement(document, appHdr);
 
         // Create signature reference (signs entire document with enveloped transform)
         List<Transform> transforms = new ArrayList<>();
         transforms.add(signatureFactory.newTransform(Transform.ENVELOPED, (TransformParameterSpec) null));
-        transforms.add(signatureFactory.newTransform(CanonicalizationMethod.EXCLUSIVE, (TransformParameterSpec) null));
 
         Reference reference = signatureFactory.newReference("", // Empty URI means sign entire document
                 signatureFactory.newDigestMethod(DigestMethod.SHA256, null), transforms, null, null);
@@ -136,23 +130,10 @@ public class NpsXmlSigner {
 
         // Create and sign
         XMLSignature signature = signatureFactory.newXMLSignature(signedInfo, keyInfo);
-        DOMSignContext signContext = new DOMSignContext(privateKey, sgntr);
+        DOMSignContext signContext = new DOMSignContext(privateKey, root);
         signature.sign(signContext);
 
         return documentToString(document);
-    }
-
-    private Element findOrCreateSgntrElement(Document document, Element appHdr) {
-        NodeList sgntrList = appHdr.getElementsByTagNameNS("*", "Sgntr");
-        if (sgntrList.getLength() > 0) {
-            return (Element) sgntrList.item(0);
-        }
-
-        // Create Sgntr element with proper namespace
-        String namespace = appHdr.getNamespaceURI();
-        Element sgntr = document.createElementNS(namespace, "Sgntr");
-        appHdr.appendChild(sgntr);
-        return sgntr;
     }
 
     /**
@@ -168,14 +149,27 @@ public class NpsXmlSigner {
 
         // Find signature element
         NodeList signatureList = document.getElementsByTagNameNS(XMLSignature.XMLNS, "Signature");
-        if (signatureList.getLength() == 0) {
-            Log.warn("No signature found in XML message");
+        if (signatureList.getLength() != 1) {
+            Log.warn("Expected one XML signature");
             return false;
         }
 
         Element signatureElement = (Element) signatureList.item(0);
+        if (signatureElement.getParentNode() != document.getDocumentElement())
+            return false;
         DOMValidateContext validateContext = new DOMValidateContext(nibssPublicKey, signatureElement);
+        validateContext.setProperty("org.jcp.xml.dsig.secureValidation", Boolean.TRUE);
         XMLSignature signature = signatureFactory.unmarshalXMLSignature(validateContext);
+        SignedInfo signedInfo = signature.getSignedInfo();
+        if (!SignatureMethod.RSA_SHA256.equals(signedInfo.getSignatureMethod().getAlgorithm())
+                || !CanonicalizationMethod.EXCLUSIVE.equals(signedInfo.getCanonicalizationMethod().getAlgorithm())
+                || signedInfo.getReferences().size() != 1)
+            return false;
+        Reference reference = (Reference) signedInfo.getReferences().get(0);
+        if (!"".equals(reference.getURI()) || !DigestMethod.SHA256.equals(reference.getDigestMethod().getAlgorithm())
+                || reference.getTransforms().size() != 1
+                || !Transform.ENVELOPED.equals(((Transform) reference.getTransforms().get(0)).getAlgorithm()))
+            return false;
 
         boolean valid = signature.validate(validateContext);
         if (!valid) {
@@ -196,8 +190,9 @@ public class NpsXmlSigner {
     private String documentToString(Document document) throws Exception {
         TransformerFactory transformerFactory = TransformerFactory.newInstance();
         Transformer transformer = transformerFactory.newTransformer();
-        transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "yes");
+        transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "no");
         transformer.setOutputProperty(OutputKeys.INDENT, "no");
+        transformer.setOutputProperty(OutputKeys.ENCODING, "UTF-8");
 
         StringWriter writer = new StringWriter();
         transformer.transform(new DOMSource(document), new StreamResult(writer));

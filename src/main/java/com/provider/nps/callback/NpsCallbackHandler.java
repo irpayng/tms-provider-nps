@@ -56,8 +56,8 @@ public class NpsCallbackHandler {
                 transfer.getAmount(), transfer.getCreditorAccount());
 
         try {
-            // TODO: In production, look up the creditor account in our system
-            // For now, we accept all transfers and publish to Kafka for processing
+            // Account eligibility and ledger authorization are not integrated yet.
+            // Broker acknowledgement below represents receipt, not completed payment.
 
             // Validate basic fields
             if (transfer.getCreditorAccount() == null || transfer.getCreditorAccount().isBlank()) {
@@ -97,26 +97,13 @@ public class NpsCallbackHandler {
                 enquiry.getSourceBankCode());
 
         try {
-            // TODO: In production, look up account in our system
-            // This would call the account service or wallet service
-
             // Validate account number format
             if (enquiry.getAccountNumber() == null || enquiry.getAccountNumber().length() < 10) {
                 return CallbackResult.rejected("AC01", "Invalid account number");
             }
 
-            // Placeholder: In production, query account database
-            // For now, return a mock response
-            // In real implementation:
-            // AccountInfo account =
-            // accountService.findByNumber(enquiry.getAccountNumber());
-            // if (account == null) {
-            // return CallbackResult.rejected("AC01", "Account not found");
-            // }
-            // return CallbackResult.success(account.getName());
-
-            // Mock response for development
-            Log.warn("Name enquiry using mock response - implement account lookup in production");
+            // Account lookup is not connected; never fabricate a verified account.
+            Log.warn("Inbound name enquiry cannot verify accounts until account lookup is integrated");
             return CallbackResult.rejected("AC01", "Account not found");
 
         } catch (Exception e) {
@@ -136,7 +123,7 @@ public class NpsCallbackHandler {
         try {
             // Publish to Kafka for transaction service to process
             publishStatusUpdate("pacs002", status.getOriginalMessageId(), status.getTransactionStatus(),
-                    status.getReasonCode());
+                    status.getReasonCode(), status);
 
         } catch (Exception e) {
             throw new IllegalStateException("Failed to process payment status update", e);
@@ -207,6 +194,11 @@ public class NpsCallbackHandler {
     }
 
     private void publishStatusUpdate(String messageType, String originalMsgId, String status, String reasonCode) {
+        publishStatusUpdate(messageType, originalMsgId, status, reasonCode, null);
+    }
+
+    private void publishStatusUpdate(String messageType, String originalMsgId, String status, String reasonCode,
+            PaymentStatusResponse payment) {
         try {
             StatusUpdateEvent event = new StatusUpdateEvent();
             event.eventType = "NPS_STATUS_UPDATE";
@@ -214,6 +206,14 @@ public class NpsCallbackHandler {
             event.originalMessageId = originalMsgId;
             event.status = status;
             event.reasonCode = reasonCode;
+            if (payment != null) {
+                event.statusId = payment.getStatusId();
+                event.responseMessageId = payment.getMessageId();
+                event.originalInstructionId = payment.getOriginalInstructionId();
+                event.originalTransactionId = payment.getTransactionId();
+                event.originalEndToEndId = payment.getEndToEndId();
+                event.reasonDescription = payment.getReasonDescription();
+            }
             event.timestamp = java.time.Instant.now().toString();
 
             String json = objectMapper.writeValueAsString(event);
@@ -265,6 +265,12 @@ public class NpsCallbackHandler {
     }
 
     public static class StatusUpdateEvent {
+        public String statusId;
+        public String responseMessageId;
+        public String originalInstructionId;
+        public String originalTransactionId;
+        public String originalEndToEndId;
+        public String reasonDescription;
         public String eventType;
         public String messageType;
         public String originalMessageId;

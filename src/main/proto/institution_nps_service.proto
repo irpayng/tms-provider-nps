@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+package institution.nps.v1;
+option java_multiple_files = true;
+option java_package = "com.provider.nps.internal.grpc";
+
+// Implemented by the institution's internal services, not by the NIBSS adapter.
+// These calls must be idempotent. Repeated keys with different business data
+// must be rejected; a timeout does not prove the operation was not processed.
+service InstitutionNpsService {
+  rpc VerifyAccount (AccountVerificationRequest) returns (AccountVerificationResult);
+  rpc ProcessInboundCredit (InboundCreditRequest) returns (InboundCreditDecision);
+  rpc NotifyPaymentStatus (PaymentStatusNotification) returns (NotificationReceipt);
+}
+
+message InstitutionAgent {
+  string member_id = 1;
+  string bic = 2;
+}
+message AccountIdentity {
+  string account_number = 1;
+  string account_name = 2;
+  string account_designation = 3;
+  string id_type = 4;
+  string id_value = 5;
+  string account_tier = 6;
+}
+message AccountVerificationRequest {
+  string idempotency_key = 1; // Stable across delivery retries.
+  string message_id = 2;
+  string creation_time = 3; // Original NIBSS ISO 8601 value.
+  string verification_id = 4;
+  InstitutionAgent assigner = 5;
+  InstitutionAgent assignee = 6;
+  string account_number = 7;
+  string expected_account_name = 8;
+}
+message AccountVerificationResult {
+  string original_message_id = 1;
+  bool verified = 2;
+  AccountIdentity creditor = 3;
+  string reason_code = 4;
+  string reason_description = 5;
+  string risk_rating = 6;
+}
+message InboundCreditRequest {
+  string idempotency_key = 1;
+  string message_id = 2;
+  string creation_time = 3;
+  string instruction_id = 4;
+  string end_to_end_id = 5;
+  string transaction_id = 6;
+  string amount = 7; // Exact decimal text, not a floating-point value.
+  string currency = 8;
+  string settlement_date = 9;
+  InstitutionAgent instructing_agent = 10;
+  InstitutionAgent instructed_agent = 11;
+  AccountIdentity debtor = 12;
+  AccountIdentity creditor = 13;
+  string narration = 14;
+  string name_enquiry_message_id = 15;
+  string channel_code = 16;
+  string transaction_location = 17;
+  string risk_rating = 18;
+}
+enum CreditDecision {
+  CREDIT_DECISION_UNSPECIFIED = 0;
+  CREDIT_AUTHORIZED = 1;
+  CREDIT_REJECTED = 2;
+  CREDIT_PENDING = 3;
+}
+message InboundCreditDecision {
+  string original_message_id = 1;
+  CreditDecision decision = 2;
+  string reason_code = 3;
+  string reason_description = 4;
+  string internal_transaction_reference = 5;
+  // AUTHORIZED must represent a durable business decision. Its precise ledger
+  // posting guarantee must be agreed with the implementing institution service.
+}
+message PaymentStatusNotification {
+  string idempotency_key = 1;
+  string message_id = 2;
+  string original_message_id = 3;
+  string original_instruction_id = 4;
+  string original_end_to_end_id = 5;
+  string original_transaction_id = 6;
+  string group_status = 7;
+  string transaction_status = 8;
+  string status_id = 9; // AUTH, NAUT, NOAN are preserved separately.
+  string reason_code = 10;
+  string reason_description = 11;
+  string settlement_date = 12;
+  string creation_time = 13;
+  string original_creation_time = 14;
+}
+message NotificationReceipt {
+  string message_id = 1;
+  bool durably_accepted = 2; // Receipt alone does not establish payment finality.
+}

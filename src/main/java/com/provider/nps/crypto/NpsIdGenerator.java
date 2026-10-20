@@ -10,8 +10,8 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 /**
  * NPS ID and timestamp generator.
  * 
- * Per NPS spec: - Message ID (MsgId): 35 characters = sourceID (12) +
- * yyyyMMddHHmmss (14) + random (9) - End-to-End ID: Same format as MsgId - All
+ * Per NPS spec: - Message ID (MsgId): 35 characters = sourceID (6) +
+ * yyyyMMddHHmmss (14) + random (15) - End-to-End ID: Same format as MsgId - All
  * timestamps in WAT (West Africa Time, UTC+1)
  */
 @ApplicationScoped
@@ -26,15 +26,17 @@ public class NpsIdGenerator {
     String sourceId;
 
     /**
-     * Generates a 35-character NPS message ID. Format: sourceID (12) +
-     * yyyyMMddHHmmss (14) + random (9)
+     * Generates a 35-character NPS message ID. Format: sourceID (6) +
+     * yyyyMMddHHmmss (14) + random (15)
      */
     public String generateMessageId() {
-        String paddedSourceId = padOrTruncate(sourceId, 12);
+        if (sourceId == null || !sourceId.matches("[0-9]{6}")) {
+            throw new IllegalArgumentException("NPS_SOURCE_ID must contain exactly six digits");
+        }
         String timestamp = ZonedDateTime.now(WAT_ZONE).format(DATE_FORMAT);
-        String random = generateRandomDigits(9);
+        String random = generateRandomDigits(15);
 
-        return paddedSourceId + timestamp + random;
+        return sourceId + timestamp + random;
     }
 
     /**
@@ -80,13 +82,4 @@ public class NpsIdGenerator {
         return sb.toString();
     }
 
-    private String padOrTruncate(String value, int length) {
-        if (value == null) {
-            value = "";
-        }
-        if (value.length() > length) {
-            return value.substring(0, length);
-        }
-        return String.format("%-" + length + "s", value).replace(' ', '0');
-    }
 }

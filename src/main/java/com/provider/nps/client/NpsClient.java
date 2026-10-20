@@ -20,13 +20,9 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
  * 
  * Handles all HTTP communication with NIBSS NPS endpoints.
  * 
- * NPS Endpoints (per integration doc): - /nps/acmt/023 - Account identification
- * (Name Enquiry request) - /nps/acmt/024 - Account identification response -
- * /nps/pacs/008 - Credit transfer (FI to FI) - /nps/pacs/002 - Payment status
- * report - /nps/pain/001 - Payment initiation (Customer to FI) - /nps/pain/002
- * - Payment initiation status - /nps/pacs/028 - Payment status request
- * (Requery)
- * 
+ * NPS guide routes name enquiry to /nps/acmt and transfer/status requests to
+ * /nps/pacs. Payment initiation remains a separate integration path.
+ *
  * All requests are: 1. Signed with W3C XMLDSIG (RSA-SHA256) 2. Encrypted with
  * AES-256-GCM + RSA-OAEP key wrapping 3. Sent with OAuth2 Bearer token
  */
@@ -35,6 +31,15 @@ public class NpsClient {
 
     @ConfigProperty(name = "nps.base-url")
     String baseUrl;
+
+    @ConfigProperty(name = "nps.name-enquiry-path", defaultValue = "/nps/acmt")
+    String nameEnquiryPath = "/nps/acmt";
+    @ConfigProperty(name = "nps.credit-transfer-path", defaultValue = "/nps/pacs")
+    String creditTransferPath = "/nps/pacs";
+    @ConfigProperty(name = "nps.requery-path", defaultValue = "/nps/pacs")
+    String requeryPath = "/nps/pacs";
+    @ConfigProperty(name = "nps.payment-initiation-path", defaultValue = "/nps/pain")
+    String paymentInitiationPath = "/nps/pain";
 
     @ConfigProperty(name = "nps.timeout-ms", defaultValue = "20000")
     int timeoutMs;
@@ -67,7 +72,7 @@ public class NpsClient {
      * @return The NPS response
      */
     public NpsResponse sendNameEnquiry(String xml) throws Exception {
-        return sendRequest("/nps/acmt/023", xml);
+        return sendRequest(nameEnquiryPath, xml);
     }
 
     /**
@@ -78,7 +83,7 @@ public class NpsClient {
      * @return The NPS response
      */
     public NpsResponse sendCreditTransfer(String xml) throws Exception {
-        return sendRequest("/nps/pacs/008", xml);
+        return sendRequest(creditTransferPath, xml);
     }
 
     /**
@@ -89,7 +94,7 @@ public class NpsClient {
      * @return The NPS response
      */
     public NpsResponse sendPaymentInitiation(String xml) throws Exception {
-        return sendRequest("/nps/pain/001", xml);
+        return sendRequest(paymentInitiationPath, xml);
     }
 
     /**
@@ -100,7 +105,7 @@ public class NpsClient {
      * @return The NPS response
      */
     public NpsResponse sendPaymentStatusRequest(String xml) throws Exception {
-        return sendRequest("/nps/pacs/028", xml);
+        return sendRequest(requeryPath, xml);
     }
 
     /**
@@ -209,8 +214,11 @@ public class NpsClient {
     private void parseResponseCode(NpsResponse response, String xml) {
         var document = NpsXml.parse(xml);
         String status = NpsXml.first(document, "TxSts");
+        if (status == null)
+            status = NpsXml.first(document, "GrpSts");
         response.setResponseCode(status != null ? status : NpsXml.first(document, "Cd"));
         response.setMessageId(NpsXml.first(document, "MsgId"));
+        response.setStatusId(NpsXml.first(document, "StsId"));
     }
 
     /**
@@ -247,6 +255,13 @@ public class NpsClient {
         private boolean success;
         private int httpStatus;
         private String responseCode;
+        private String statusId;
+        public String getStatusId() {
+            return statusId;
+        }
+        public void setStatusId(String value) {
+            statusId = value;
+        }
         private String messageId;
         private String rawRequest;
         private String rawResponse;
@@ -336,7 +351,8 @@ public class NpsClient {
             if (responseCode == null) {
                 return false;
             }
-            return success && NpsPaymentStatus.fromCode(responseCode).isSuccessful();
+            return success && NpsPaymentStatus.fromCode(responseCode).isSuccessful()
+                    && (statusId == null || "AUTH".equals(statusId));
         }
 
         public boolean isTransactionPending() {
@@ -344,7 +360,8 @@ public class NpsClient {
         }
 
         public boolean isTransactionRejected() {
-            return success && NpsPaymentStatus.fromCode(responseCode).isRejected();
+            return success && NpsPaymentStatus.fromCode(responseCode).isRejected()
+                    && (statusId == null || "NAUT".equals(statusId) || "NOAN".equals(statusId));
         }
 
         @Override

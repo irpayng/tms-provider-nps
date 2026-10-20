@@ -24,8 +24,10 @@ class NpsIdGeneratorTest {
     @DisplayName("Message ID should start with source ID")
     void testMessageIdStartsWithSourceId() {
         String msgId = idGenerator.generateMessageId();
-        // Source ID is padded/truncated to 12 chars
-        assertTrue(msgId.length() >= 12);
+        assertEquals("999057", msgId.substring(0, 6));
+        assertDoesNotThrow(() -> java.time.LocalDateTime.parse(msgId.substring(6, 20),
+                java.time.format.DateTimeFormatter.ofPattern("uuuuMMddHHmmss")));
+        assertTrue(msgId.substring(20).matches("[0-9]{15}"));
     }
 
     @Test
@@ -73,5 +75,13 @@ class NpsIdGeneratorTest {
         String compact = idGenerator.currentDateTimeCompact();
         assertEquals(14, compact.length());
         assertTrue(compact.matches("\\d{14}"));
+    }
+    @Test
+    void invalidSourceIdIsRejectedWithoutPaddingOrTruncation() {
+        var generator = new NpsIdGenerator();
+        for (String value : new String[]{null, "12345", "1234567", "ABCDEF", " 999057"}) {
+            generator.sourceId = value;
+            assertThrows(IllegalArgumentException.class, generator::generateMessageId);
+        }
     }
 }

@@ -21,17 +21,34 @@ buildNumber.properties
 .factorypath
 .vscode/
 
-# Logs
+# Logs (including rotated/compressed files)
 logs/
-*.log
+*.[lL][oO][gG]
+*.[lL][oO][gG].*
+*.[lL][oO][gG]-*
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Environment
+# Local environment and credentials
 .env
-.env.local
+.env.*
+!.env.example
+!.env.*.example
+/keys/
+/certs/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+# Synthetic crypto fixtures are required by the test suite.
+!/src/test/resources/test-*.pem
 
 # Quarkus
 .quarkus/
+
+# Local adapter journal records
+data/nps-journal/

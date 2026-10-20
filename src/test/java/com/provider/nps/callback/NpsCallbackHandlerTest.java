@@ -61,4 +61,30 @@ class NpsCallbackHandlerTest {
             assertFalse(handler.handleInboundCreditTransfer(transfer(amount)).isSuccess());
         }
     }
+    @Test
+    void paymentEventsPreserveAuthorizationAndOriginalIdentifiers() throws Exception {
+        var handler = new NpsCallbackHandler();
+        var published = new java.util.concurrent.atomic.AtomicReference<String>();
+        handler.statusUpdateEmitter = emitter(message -> {
+            published.set((String) message.getPayload());
+            message.ack();
+        });
+        var status = new com.provider.nps.message.NpsResponseParser.PaymentStatusResponse();
+        status.setOriginalMessageId("original-id");
+        status.setMessageId("response-id");
+        status.setStatusId("NOAN");
+        status.setTransactionStatus("RJCT");
+        status.setReasonCode("AC01");
+        status.setOriginalInstructionId("instruction-id");
+        status.setTransactionId("transaction-id");
+        status.setEndToEndId("end-id");
+        status.setReasonDescription("Rejected by timeout");
+        handler.handlePaymentStatusUpdate(status);
+        var event = new com.fasterxml.jackson.databind.ObjectMapper().readTree(published.get());
+        assertEquals("NOAN", event.get("statusId").asText());
+        assertEquals("original-id", event.get("originalMessageId").asText());
+        assertEquals("instruction-id", event.get("originalInstructionId").asText());
+        assertEquals("transaction-id", event.get("originalTransactionId").asText());
+        assertEquals("Rejected by timeout", event.get("reasonDescription").asText());
+    }
 }

@@ -1,91 +1,83 @@
 package com.provider.nps.message;
 
+import static com.provider.nps.message.NpsFields.agent;
+import static com.provider.nps.message.NpsFields.member;
+import static com.provider.nps.message.NpsFields.required;
+import static com.provider.nps.message.NpsFields.xml;
+
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
 
-/**
- * Builder for pacs.028.001.04 - FIToFIPaymentStatusRequest. Used for
- * transaction status query (requery).
- * 
- * This is used to check the status of a previously sent transaction when no
- * response was received or status is unclear.
- */
 @ApplicationScoped
 public class Pacs028Builder {
-
-    private static final String NIBSS_BIC = "ABORNGLA";
-
     @Inject
     NpsMessageBuilder baseBuilder;
 
-    /**
-     * Builds a pacs.028 payment status request.
-     * 
-     * @param originalMsgId
-     *            The MsgId of the original transaction
-     * @param originalEndToEndId
-     *            The EndToEndId of the original transaction
-     * @return Complete ISO 20022 XML message
-     */
+    /** Incomplete legacy requests cannot satisfy the NIBSS field contract. */
+    @Deprecated
     public String build(String originalMsgId, String originalEndToEndId) {
-        String msgId = baseBuilder.getIdGenerator().generateMessageId();
-        String creDate = baseBuilder.getIdGenerator().currentTimestamp();
-
-        String appHdr = baseBuilder.buildAppHdr("pacs.028.001.04", msgId, NIBSS_BIC);
-
-        String document = buildDocument(msgId, creDate, originalMsgId, originalEndToEndId);
-
-        return baseBuilder.wrapInBizMsg(appHdr, document);
+        throw new IllegalArgumentException("Complete original transaction details are required for requery");
     }
 
-    /**
-     * Builds a payment status request with full details.
-     */
     public String build(PaymentStatusRequest request) {
-        return build(request.getOriginalMsgId(), request.getOriginalEndToEndId());
+        required(request.getOriginalMsgId(), "original_msg_id", 35);
+        required(request.getOriginalTxId(), "original_tx_id", 35);
+        required(request.getOriginalCreationDateTime(), "original_creation_time", 35);
+        required(request.getOriginalSettlementDate(), "original_settlement_date", 10);
+        try {
+            OffsetDateTime.parse(request.getOriginalCreationDateTime());
+            LocalDate.parse(request.getOriginalSettlementDate());
+        } catch (java.time.format.DateTimeParseException e) {
+            throw new IllegalArgumentException("Invalid original_creation_time or original_settlement_date", e);
+        }
+        member(request.getInstructingAgent(), "original_instructing_agent");
+        member(request.getInstructedAgent(), "original_instructed_agent");
+        String sourceMemberId = member(baseBuilder.getSourceId(), "NPS_SOURCE_ID");
+        String messageId = baseBuilder.getIdGenerator().generateMessageId();
+        return NpsMessageBuilder.XML_DECLARATION + "<ns2:Document xmlns:ns2=\"" + NpsMessageBuilder.PACS_028_NS
+                + "\"><FIToFIPmtStsReq>" + "<GrpHdr><MsgId>" + xml(messageId) + "</MsgId><CreDtTm>"
+                + xml(baseBuilder.getIdGenerator().currentTimestamp()) + "</CreDtTm><InstgAgt>" + agent(sourceMemberId)
+                + "</InstgAgt></GrpHdr>" + "<OrgnlGrpInf><OrgnlMsgId>" + xml(request.getOriginalMsgId())
+                + "</OrgnlMsgId>" + "<OrgnlMsgNmId>pacs.008.001.12</OrgnlMsgNmId><OrgnlCreDtTm>"
+                + xml(request.getOriginalCreationDateTime()) + "</OrgnlCreDtTm></OrgnlGrpInf><TxInf><StsReqId>"
+                + xml(messageId) + "</StsReqId>" + "<OrgnlTxId>" + xml(request.getOriginalTxId())
+                + "</OrgnlTxId><InstgAgt>" + agent(request.getInstructingAgent()) + "</InstgAgt><InstdAgt>"
+                + agent(request.getInstructedAgent()) + "</InstdAgt>" + "<OrgnlTxRef><IntrBkSttlmDt>"
+                + xml(request.getOriginalSettlementDate())
+                + "</IntrBkSttlmDt></OrgnlTxRef></TxInf></FIToFIPmtStsReq></ns2:Document>";
     }
 
-    private String buildDocument(String msgId, String creDate, String originalMsgId, String originalEndToEndId) {
-
-        String originalGroup = originalMsgId == null || originalMsgId.isBlank() ? "" : String.format("""
-                <OrgnlGrpInf>
-                    <OrgnlMsgId>%s</OrgnlMsgId>
-                    <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
-                </OrgnlGrpInf>
-                """, escapeXml(originalMsgId));
-        String endToEnd = originalEndToEndId == null || originalEndToEndId.isBlank()
-                ? ""
-                : "<OrgnlEndToEndId>" + escapeXml(originalEndToEndId) + "</OrgnlEndToEndId>";
-        return String.format("""
-                <Document xmlns="%s">
-                    <FIToFIPmtStsReq>
-                        <GrpHdr>
-                            <MsgId>%s</MsgId>
-                            <CreDtTm>%s</CreDtTm>
-                        </GrpHdr>
-                        %s
-                        <TxInf>
-                            %s
-                            <InstgAgt>
-                                <FinInstnId>
-                                    <BICFI>%s</BICFI>
-                                </FinInstnId>
-                            </InstgAgt>
-                        </TxInf>
-                    </FIToFIPmtStsReq>
-                </Document>""", NpsMessageBuilder.PACS_028_NS, msgId, creDate, originalGroup, endToEnd,
-                baseBuilder.getSourceBic());
-    }
-
-    private String escapeXml(String value) {
-        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
-                .replace("'", "&apos;");
-    }
-
-    /**
-     * Request data class for payment status query.
-     */
     public static class PaymentStatusRequest {
+        private String originalCreationDateTime;
+        private String originalSettlementDate;
+        private String instructingAgent;
+        private String instructedAgent;
+        public String getOriginalCreationDateTime() {
+            return originalCreationDateTime;
+        }
+        public void setOriginalCreationDateTime(String value) {
+            originalCreationDateTime = value;
+        }
+        public String getOriginalSettlementDate() {
+            return originalSettlementDate;
+        }
+        public void setOriginalSettlementDate(String value) {
+            originalSettlementDate = value;
+        }
+        public String getInstructingAgent() {
+            return instructingAgent;
+        }
+        public void setInstructingAgent(String value) {
+            instructingAgent = value;
+        }
+        public String getInstructedAgent() {
+            return instructedAgent;
+        }
+        public void setInstructedAgent(String value) {
+            instructedAgent = value;
+        }
         private String originalMsgId;
         private String originalEndToEndId;
         private String originalTxId;

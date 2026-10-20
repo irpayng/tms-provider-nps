@@ -1,12 +1,16 @@
 package com.provider.nps.callback;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.provider.nps.crypto.NpsIdGenerator;
 import com.provider.nps.crypto.NpsXmlEncryptor;
 import com.provider.nps.crypto.NpsXmlSigner;
+import com.provider.nps.internal.InboundConflictException;
+import com.provider.nps.internal.InboundNpsForwarder;
 import com.provider.nps.message.NpsInboundParser;
 import com.provider.nps.message.NpsResponseParser;
 import com.provider.nps.message.NpsResponseParser.NameEnquiryResponse;
 import com.provider.nps.message.NpsResponseParser.PaymentStatusResponse;
+import io.grpc.StatusRuntimeException;
 import io.quarkus.logging.Log;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
@@ -51,6 +55,15 @@ public class NpsCallbackResource {
     @Inject
     NpsInboundParser inboundParser;
 
+    @Inject
+    NpsIdGenerator idGenerator;
+
+    @Inject
+    InboundNpsForwarder internalForwarder;
+
+    @ConfigProperty(name = "nps.inbound.mode", defaultValue = "grpc")
+    String inboundMode;
+
     /**
      * Callback for inbound credit transfer (pacs.008). NPS sends this when another
      * bank initiates a transfer TO us.
@@ -71,10 +84,12 @@ public class NpsCallbackResource {
                 boolean signatureValid = xmlSigner.verify(decryptedXml);
                 if (!signatureValid) {
                     Log.warn("Invalid signature on inbound pacs.008");
-                    return Response.status(Response.Status.BAD_REQUEST)
-                            .entity(buildErrorResponse("RJCT", "Invalid signature")).build();
+                    return Response.status(Response.Status.BAD_REQUEST).build();
                 }
             }
+
+            if (useInternalGrpc())
+                return securedReply(internalForwarder.credit(decryptedXml));
 
             // Parse the credit transfer
             InboundCreditTransfer transfer = inboundParser.parseCreditTransfer(decryptedXml);
@@ -83,7 +98,7 @@ public class NpsCallbackResource {
             CallbackResult result = callbackHandler.handleInboundCreditTransfer(transfer);
 
             // Build pacs.002 response
-            String responseXml = buildPacs002Response(transfer, result);
+            String responseXml = buildPacs002Response(transfer, result).replaceAll(">\\s+<", "><");
 
             // Sign and encrypt response (skip in test mode)
             String finalResponse;
@@ -98,10 +113,16 @@ public class NpsCallbackResource {
 
             return Response.ok(finalResponse).build();
 
+        } catch (StatusRuntimeException e) {
+            Log.warn("Internal NPS service did not return a resolved result", e);
+            return Response.status(Response.Status.SERVICE_UNAVAILABLE).build();
+        } catch (InboundConflictException e) {
+            return Response.status(Response.Status.CONFLICT).build();
+        } catch (IllegalArgumentException e) {
+            return Response.status(Response.Status.BAD_REQUEST).build();
         } catch (Exception e) {
             Log.error("Failed to process inbound pacs.008", e);
-            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity(buildErrorResponse("RJCT", "Processing error")).build();
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR).build();
         }
     }
 
@@ -129,8 +150,15 @@ public class NpsCallbackResource {
                 }
             }
 
+            if (useInternalGrpc()) {
+                internalForwarder.paymentStatus(decryptedXml);
+                return Response.ok().build();
+            }
+
             // Parse status report
             PaymentStatusResponse status = responseParser.parsePaymentStatusResponse(decryptedXml);
+            if (status.getErrorMessage() != null)
+                return Response.status(Response.Status.BAD_REQUEST).build();
 
             // Update transaction status in our system
             callbackHandler.handlePaymentStatusUpdate(status);
@@ -140,6 +168,13 @@ public class NpsCallbackResource {
 
             return Response.ok().build();
 
+        } catch (StatusRuntimeException e) {
+            Log.warn("Internal NPS service did not return a resolved result", e);
+            return Response.status(Response.Status.SERVICE_UNAVAILABLE).build();
+        } catch (InboundConflictException e) {
+            return Response.status(Response.Status.CONFLICT).build();
+        } catch (IllegalArgumentException e) {
+            return Response.status(Response.Status.BAD_REQUEST).build();
         } catch (Exception e) {
             Log.error("Failed to process pacs.002 callback", e);
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR).build();
@@ -166,10 +201,12 @@ public class NpsCallbackResource {
                 boolean signatureValid = xmlSigner.verify(decryptedXml);
                 if (!signatureValid) {
                     Log.warn("Invalid signature on inbound acmt.023");
-                    return Response.status(Response.Status.BAD_REQUEST)
-                            .entity(buildErrorResponse("RJCT", "Invalid signature")).build();
+                    return Response.status(Response.Status.BAD_REQUEST).build();
                 }
             }
+
+            if (useInternalGrpc())
+                return securedReply(internalForwarder.nameEnquiry(decryptedXml));
 
             // Parse the name enquiry request
             InboundNameEnquiry enquiry = inboundParser.parseNameEnquiry(decryptedXml);
@@ -178,7 +215,7 @@ public class NpsCallbackResource {
             CallbackResult result = callbackHandler.handleInboundNameEnquiry(enquiry);
 
             // Build acmt.024 response
-            String responseXml = buildAcmt024Response(enquiry, result);
+            String responseXml = buildAcmt024Response(enquiry, result).replaceAll(">\\s+<", "><");
 
             // Sign and encrypt response (skip in test mode)
             String finalResponse;
@@ -194,10 +231,16 @@ public class NpsCallbackResource {
 
             return Response.ok(finalResponse).build();
 
+        } catch (StatusRuntimeException e) {
+            Log.warn("Internal NPS service did not return a resolved result", e);
+            return Response.status(Response.Status.SERVICE_UNAVAILABLE).build();
+        } catch (InboundConflictException e) {
+            return Response.status(Response.Status.CONFLICT).build();
+        } catch (IllegalArgumentException e) {
+            return Response.status(Response.Status.BAD_REQUEST).build();
         } catch (Exception e) {
             Log.error("Failed to process inbound acmt.023", e);
-            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity(buildErrorResponse("RJCT", "Processing error")).build();
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR).build();
         }
     }
 
@@ -226,6 +269,8 @@ public class NpsCallbackResource {
             }
 
             NameEnquiryResponse response = responseParser.parseNameEnquiryResponse(decryptedXml);
+            if (response.getErrorMessage() != null)
+                return Response.status(Response.Status.BAD_REQUEST).build();
             callbackHandler.handleNameEnquiryResponse(response);
 
             Log.infof("Processed acmt.024: msgId=%s, accountName=%s", response.getMessageId(),
@@ -263,6 +308,8 @@ public class NpsCallbackResource {
             }
 
             var response = responseParser.parsePaymentInitiationStatus(decryptedXml);
+            if (response.getErrorMessage() != null)
+                return Response.status(Response.Status.BAD_REQUEST).build();
             callbackHandler.handlePaymentInitiationResponse(response);
 
             Log.infof("Processed pain.002: msgId=%s, status=%s", response.getMessageId(),
@@ -276,13 +323,17 @@ public class NpsCallbackResource {
         }
     }
 
-    private String buildErrorResponse(String status, String reason) {
-        return String.format("""
-                <?xml version="1.0" encoding="UTF-8"?>
-                <Error>
-                    <Status>%s</Status>
-                    <Reason>%s</Reason>
-                </Error>""", status, reason);
+    private boolean useInternalGrpc() {
+        if ("grpc".equals(inboundMode))
+            return true;
+        if ("legacy-test".equals(inboundMode) && skipCrypto)
+            return false;
+        throw io.grpc.Status.UNAVAILABLE.withDescription("Unsupported inbound mode").asRuntimeException();
+    }
+
+    private Response securedReply(String xml) throws Exception {
+        String response = skipCrypto ? xml : xmlEncryptor.encrypt(xmlSigner.sign(xml));
+        return Response.ok(response).build();
     }
 
     private String buildPacs002Response(InboundCreditTransfer transfer, CallbackResult result) {
@@ -315,9 +366,9 @@ public class NpsCallbackResource {
                             </TxInfAndSts>
                         </FIToFIPmtStsRpt>
                     </Document>
-                </BizMsg>""", java.util.UUID.randomUUID().toString().replace("-", ""), timestamp,
-                java.util.UUID.randomUUID().toString().replace("-", ""), timestamp, transfer.getMessageId(),
-                transfer.getEndToEndId(), result.getStatus(), result.isSuccess() ? "" : String.format("""
+                </BizMsg>""", idGenerator.generateMessageId(), timestamp, idGenerator.generateMessageId(), timestamp,
+                transfer.getMessageId(), transfer.getEndToEndId(), result.getStatus(),
+                result.isSuccess() ? "" : String.format("""
                         <StsRsnInf>
                             <Rsn><Cd>%s</Cd></Rsn>
                             <AddtlInf>%s</AddtlInf>
@@ -361,9 +412,8 @@ public class NpsCallbackResource {
                                 </Rpt>
                             </IdVrfctnRpt>
                         </Document>
-                    </BizMsg>""", java.util.UUID.randomUUID().toString().replace("-", ""), timestamp,
-                    java.util.UUID.randomUUID().toString().replace("-", ""), timestamp, enquiry.getMessageId(),
-                    result.getAccountName(), enquiry.getAccountNumber());
+                    </BizMsg>""", idGenerator.generateMessageId(), timestamp, idGenerator.generateMessageId(),
+                    timestamp, enquiry.getMessageId(), result.getAccountName(), enquiry.getAccountNumber());
         } else {
             return String.format("""
                     <?xml version="1.0" encoding="UTF-8"?>
@@ -388,9 +438,8 @@ public class NpsCallbackResource {
                                 </Rpt>
                             </IdVrfctnRpt>
                         </Document>
-                    </BizMsg>""", java.util.UUID.randomUUID().toString().replace("-", ""), timestamp,
-                    java.util.UUID.randomUUID().toString().replace("-", ""), timestamp, enquiry.getMessageId(),
-                    result.getReasonCode());
+                    </BizMsg>""", idGenerator.generateMessageId(), timestamp, idGenerator.generateMessageId(),
+                    timestamp, enquiry.getMessageId(), result.getReasonCode());
         }
     }
 

@@ -4,7 +4,6 @@ import com.provider.nps.xml.NpsXml;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.w3c.dom.Document;
-import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 
 /**
@@ -25,15 +24,29 @@ public class NpsResponseParser {
         try {
             Document doc = NpsXml.parse(xml);
 
-            String report = "BizMsg/Document/IdVrfctnRpt/";
+            String report = NpsXml.businessPath(doc, "IdVrfctnRpt");
             String account = report + "Rpt/UpdtdPtyAndAcctId/";
             response.setMessageId(NpsXml.text(doc, report + "Assgnmt/MsgId"));
             response.setVerificationStatus(NpsXml.text(doc, report + "Rpt/Vrfctn"));
             response.setReasonCode(NpsXml.text(doc, report + "Rpt/Rsn/Cd"));
-            response.setAccountNumber(NpsXml.text(doc, account + "Acct/Id/Othr/Id"));
+            response.setAccountNumber(NpsXml.account(doc, account + "Acct/"));
+            if (response.getAccountNumber() == null) {
+                response.setAccountNumber(NpsXml.account(doc, report + "Rpt/OrgnlPtyAndAcctId/Acct/"));
+            }
             response.setAccountName(NpsXml.text(doc, account + "Pty/Nm"));
-            response.setBvn(extractBvn(doc));
+            String details = report + "SplmtryData/Envlp/CustomData/";
+            response.setAccountDesignation(NpsXml.text(doc, details + "CreditorInfo/AccountDesignation"));
+            response.setIdType(NpsXml.text(doc, details + "CreditorInfo/IdType"));
+            response.setIdValue(NpsXml.text(doc, details + "CreditorInfo/IdValue"));
+            response.setAccountTier(NpsXml.text(doc, details + "CreditorInfo/AccountTier"));
+            response.setRiskRating(NpsXml.text(doc, details + "TransactionInfo/RiskRating"));
+            response.setBvn("BVN".equals(response.getIdType())
+                    ? response.getIdValue()
+                    : response.getIdType() == null ? extractBvn(doc, account + "Pty/Id/PrvtId") : null);
             response.setBankCode(NpsXml.text(doc, account + "Agt/FinInstnId/ClrSysMmbId/MmbId"));
+            if (response.getBankCode() == null) {
+                response.setBankCode(NpsXml.text(doc, report + "Assgnmt/Assgnr/Agt/FinInstnId/ClrSysMmbId/MmbId"));
+            }
             response.setSessionId(NpsXml.text(doc, report + "SplmtryData/Envlp/SessId"));
 
             // Determine success based on response
@@ -57,14 +70,22 @@ public class NpsResponseParser {
         try {
             Document doc = NpsXml.parse(xml);
 
-            String report = "BizMsg/Document/FIToFIPmtStsRpt/";
+            String report = NpsXml.businessPath(doc, "FIToFIPmtStsRpt");
             String transaction = report + "TxInfAndSts/";
             response.setMessageId(NpsXml.text(doc, report + "GrpHdr/MsgId"));
             response.setOriginalMessageId(NpsXml.text(doc, report + "OrgnlGrpInfAndSts/OrgnlMsgId"));
             response.setTransactionStatus(NpsXml.text(doc, transaction + "TxSts"));
+            if (response.getTransactionStatus() == null) {
+                response.setTransactionStatus(NpsXml.text(doc, report + "OrgnlGrpInfAndSts/GrpSts"));
+            }
             response.setEndToEndId(NpsXml.text(doc, transaction + "OrgnlEndToEndId"));
+            response.setStatusId(NpsXml.text(doc, transaction + "StsId"));
+            response.setOriginalInstructionId(NpsXml.text(doc, transaction + "OrgnlInstrId"));
             response.setTransactionId(NpsXml.text(doc, transaction + "OrgnlTxId"));
             response.setReasonCode(NpsXml.text(doc, transaction + "StsRsnInf/Rsn/Cd"));
+            if (response.getReasonCode() == null) {
+                response.setReasonCode(NpsXml.text(doc, transaction + "StsRsnInf/Rsn/Prtry"));
+            }
             response.setReasonDescription(NpsXml.text(doc, transaction + "StsRsnInf/AddtlInf"));
             response.setSettlementDate(NpsXml.text(doc, transaction + "OrgnlTxRef/IntrBkSttlmDt"));
             response.setSessionId(NpsXml.text(doc, report + "SplmtryData/Envlp/SessId"));
@@ -90,7 +111,7 @@ public class NpsResponseParser {
         try {
             Document doc = NpsXml.parse(xml);
 
-            String report = "BizMsg/Document/CstmrPmtStsRpt/";
+            String report = NpsXml.businessPath(doc, "CstmrPmtStsRpt");
             String transaction = report + "OrgnlPmtInfAndSts/TxInfAndSts/";
             response.setMessageId(NpsXml.text(doc, report + "GrpHdr/MsgId"));
             response.setOriginalMessageId(NpsXml.text(doc, report + "OrgnlGrpInfAndSts/OrgnlMsgId"));
@@ -110,17 +131,23 @@ public class NpsResponseParser {
         return response;
     }
 
-    private String extractBvn(Document doc) {
-        // Look for BVN in PrvtId/Othr where SchmeNm/Prtry = "BVN"
-        NodeList othrList = doc.getElementsByTagNameNS("*", "Othr");
-        for (int i = 0; i < othrList.getLength(); i++) {
-            Element othr = (Element) othrList.item(i);
-            String prtry = NpsXml.text(othr, "SchmeNm/Prtry");
-            if ("BVN".equals(prtry)) {
-                return NpsXml.text(othr, "Id");
+    private String extractBvn(Document doc, String partyPath) {
+        try {
+            var xpath = javax.xml.xpath.XPathFactory.newInstance().newXPath();
+            String path = ".";
+            for (String name : partyPath.split("/"))
+                path += "/*[local-name()='" + name + "']";
+            NodeList values = (NodeList) xpath.evaluate(path + "/*[local-name()='Othr']", doc,
+                    javax.xml.xpath.XPathConstants.NODESET);
+            for (int i = 0; i < values.getLength(); i++) {
+                var value = values.item(i);
+                if ("BVN".equals(NpsXml.text(value, "SchmeNm/Prtry")))
+                    return NpsXml.text(value, "Id");
             }
+            return null;
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Cannot read verified party BVN", e);
         }
-        return null;
     }
 
     private boolean isSuccessfulVerification(NameEnquiryResponse response) {
@@ -129,7 +156,8 @@ public class NpsResponseParser {
             return false;
         }
         // Success requires verified account details and no error reason
-        if (response.getAccountName() != null && !response.getAccountName().isBlank()) {
+        if (response.getAccountNumber() != null && response.getAccountName() != null
+                && !response.getAccountName().isBlank()) {
             String reason = response.getReasonCode();
             // Check for success codes or absence of failure codes
             return reason == null || "ACTC".equals(reason) || "0000".equals(reason);
@@ -145,6 +173,46 @@ public class NpsResponseParser {
 
     // Response classes
     public static class NameEnquiryResponse {
+        private String accountDesignation;
+        public String getAccountDesignation() {
+            return accountDesignation;
+        }
+        public void setAccountDesignation(String value) {
+            accountDesignation = value;
+        }
+
+        private String idType;
+        public String getIdType() {
+            return idType;
+        }
+        public void setIdType(String value) {
+            idType = value;
+        }
+
+        private String idValue;
+        public String getIdValue() {
+            return idValue;
+        }
+        public void setIdValue(String value) {
+            idValue = value;
+        }
+
+        private String accountTier;
+        public String getAccountTier() {
+            return accountTier;
+        }
+        public void setAccountTier(String value) {
+            accountTier = value;
+        }
+
+        private String riskRating;
+        public String getRiskRating() {
+            return riskRating;
+        }
+        public void setRiskRating(String value) {
+            riskRating = value;
+        }
+
         private boolean success;
         private String messageId;
         private String verificationStatus;
@@ -219,6 +287,21 @@ public class NpsResponseParser {
     }
 
     public static class PaymentStatusResponse {
+        private String statusId;
+        public String getStatusId() {
+            return statusId;
+        }
+        public void setStatusId(String value) {
+            statusId = value;
+        }
+        private String originalInstructionId;
+        public String getOriginalInstructionId() {
+            return originalInstructionId;
+        }
+        public void setOriginalInstructionId(String value) {
+            originalInstructionId = value;
+        }
+
         private boolean success;
         private String messageId;
         private String originalMessageId;
@@ -232,7 +315,7 @@ public class NpsResponseParser {
         private String errorMessage;
 
         public boolean isSuccess() {
-            return success;
+            return success && (statusId == null || "AUTH".equals(statusId));
         }
         public void setSuccess(boolean success) {
             this.success = success;
@@ -303,7 +386,8 @@ public class NpsResponseParser {
         }
 
         public boolean isRejected() {
-            return NpsPaymentStatus.fromCode(transactionStatus).isRejected();
+            return NpsPaymentStatus.fromCode(transactionStatus).isRejected()
+                    && (statusId == null || "NAUT".equals(statusId) || "NOAN".equals(statusId));
         }
     }
 

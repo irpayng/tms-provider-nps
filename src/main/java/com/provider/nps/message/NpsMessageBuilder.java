@@ -11,12 +11,13 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
  */
 @ApplicationScoped
 public class NpsMessageBuilder {
+    protected static final String XML_DECLARATION = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
 
     protected static final String HEAD_NS = "urn:iso:std:iso:20022:tech:xsd:head.001.001.02";
-    protected static final String ACMT_023_NS = "urn:iso:std:iso:20022:tech:xsd:acmt.023.001.03";
-    protected static final String PACS_008_NS = "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08";
+    protected static final String ACMT_023_NS = "urn:iso:std:iso:20022:tech:xsd:acmt.023.001.04";
+    protected static final String PACS_008_NS = "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.12";
     protected static final String PAIN_001_NS = "urn:iso:std:iso:20022:tech:xsd:pain.001.001.09";
-    protected static final String PACS_028_NS = "urn:iso:std:iso:20022:tech:xsd:pacs.028.001.04";
+    protected static final String PACS_028_NS = "urn:iso:std:iso:20022:tech:xsd:pacs.028.001.06";
 
     @ConfigProperty(name = "nps.source-bic")
     String sourceBic;
@@ -34,7 +35,7 @@ public class NpsMessageBuilder {
      * Builds the ISO 20022 Business Application Header (AppHdr).
      * 
      * @param msgDefIdr
-     *            Message definition identifier (e.g., "acmt.023.001.03")
+     *            Message definition identifier (e.g., "acmt.023.001.04")
      * @param bizMsgIdr
      *            Business message identifier
      * @param toBic
