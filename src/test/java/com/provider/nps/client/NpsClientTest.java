@@ -2,6 +2,8 @@ package com.provider.nps.client;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.provider.nps.crypto.NpsXmlEncryptor;
 import com.provider.nps.crypto.NpsXmlSigner;
 import com.sun.net.httpserver.HttpServer;
@@ -10,7 +12,11 @@ import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.eclipse.microprofile.reactive.messaging.Emitter;
+import org.eclipse.microprofile.reactive.messaging.Message;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -61,7 +67,7 @@ class NpsClientTest {
     @Test
     void persistentUnauthorizedResponseRetriesOnlyOnceWithIdenticalPayload() throws Exception {
         var client = client(401, "Unauthorized");
-        var response = client.sendCreditTransfer("<Request>same-id</Request>");
+        var response = client.sendCreditTransfer("ref-1", "<Request>same-id</Request>");
         assertFalse(response.isSuccess());
         assertEquals(401, response.getHttpStatus());
         assertEquals(1, refreshes.get());
@@ -92,7 +98,7 @@ class NpsClientTest {
                 return xml;
             }
         };
-        var response = client.sendCreditTransfer("<Request/>");
+        var response = client.sendCreditTransfer("ref-1", "<Request/>");
         assertFalse(response.isSuccess());
         assertFalse(response.isSignatureValid());
         assertNull(response.getDecryptedResponse());
@@ -104,7 +110,7 @@ class NpsClientTest {
     void parsesPrefixedResponseFields() throws Exception {
         var client = client(200,
                 "<p:Document xmlns:p='urn:test'><p:MsgId>report-id</p:MsgId><p:TxSts>ACSC</p:TxSts></p:Document>");
-        var response = client.sendCreditTransfer("<Request/>");
+        var response = client.sendCreditTransfer("ref-1", "<Request/>");
         assertTrue(response.isTransactionSuccessful());
         assertEquals("report-id", response.getMessageId());
     }
@@ -128,15 +134,15 @@ class NpsClientTest {
                 }
             }
         };
-        assertThrows(HttpTimeoutException.class, () -> client.sendCreditTransfer("<Request/>"));
+        assertThrows(HttpTimeoutException.class, () -> client.sendCreditTransfer("ref-1", "<Request/>"));
         assertEquals(1, bodies.size());
     }
     @Test
     void operationPathCanBeConfiguredWithoutChangingSharedDefault() throws Exception {
         var client = client(200, "<Document><GrpSts>ACSC</GrpSts></Document>");
-        assertTrue(client.sendCreditTransfer("<Request/>").isTransactionSuccessful());
+        assertTrue(client.sendCreditTransfer("ref-1", "<Request/>").isTransactionSuccessful());
         client.creditTransferPath = "/nps/pacs/008";
-        assertTrue(client.sendCreditTransfer("<Request/>").isTransactionSuccessful());
+        assertTrue(client.sendCreditTransfer("ref-1", "<Request/>").isTransactionSuccessful());
         assertEquals(List.of("/nps/pacs", "/nps/pacs/008"), paths);
     }
     @Test
@@ -150,5 +156,68 @@ class NpsClientTest {
             assertFalse(response.isTransactionSuccessful());
             assertFalse(response.isTransactionRejected());
         }
+    }
+
+    @Test
+    void everyExchangeIsLoggedInTheLoggerServiceShape() throws Exception {
+        var client = client(200, "<Document><TxSts>ACSC</TxSts></Document>");
+        var events = capturedClientLogs(client);
+        client.sendCreditTransfer("ref-1", "<Request/>");
+
+        assertEquals(1, events.size());
+        JsonNode event = new ObjectMapper().readTree(events.get(0));
+        assertEquals("nps", event.get("provider").asText());
+        assertEquals("provider-nps", event.get("service").asText());
+        assertEquals("ref-1", event.get("reference").asText());
+        assertEquals("POST", event.get("method").asText());
+        assertEquals(client.baseUrl + "/nps/pacs", event.get("url").asText());
+        assertEquals("<Request/>", event.get("request_body").asText());
+        assertEquals(200, event.get("response_status").asInt());
+        assertEquals("<Document><TxSts>ACSC</TxSts></Document>", event.get("response_body").asText());
+        assertTrue(event.has("duration_ms"));
+        assertTrue(event.has("timestamp"));
+    }
+
+    @Test
+    void transportFailureIsLoggedAsStatusZero() throws Exception {
+        var client = client(200, "<Document/>");
+        server.stop(0);
+        server = null;
+        var events = capturedClientLogs(client);
+        assertThrows(java.io.IOException.class, () -> client.sendCreditTransfer("ref-1", "<Request/>"));
+
+        assertEquals(1, events.size());
+        assertEquals(0, new ObjectMapper().readTree(events.get(0)).get("response_status").asInt());
+    }
+
+    private static List<String> capturedClientLogs(NpsClient client) {
+        List<String> events = new ArrayList<>();
+        client.clientLogs = new ClientLogPublisher();
+        client.clientLogs.emitter = new Emitter<>() {
+            @Override
+            public CompletionStage<Void> send(String payload) {
+                events.add(payload);
+                return CompletableFuture.completedFuture(null);
+            }
+            @Override
+            public <M extends Message<? extends String>> void send(M message) {
+                events.add(message.getPayload());
+            }
+            @Override
+            public void complete() {
+            }
+            @Override
+            public void error(Exception e) {
+            }
+            @Override
+            public boolean isCancelled() {
+                return false;
+            }
+            @Override
+            public boolean hasRequests() {
+                return true;
+            }
+        };
+        return events;
     }
 }

@@ -6,6 +6,7 @@ import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -27,8 +28,8 @@ class NpsTokenManagerTest {
         try {
             var manager = new NpsTokenManager();
             manager.tokenUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/token";
-            manager.clientId = "client";
-            manager.clientSecret = "secret";
+            manager.clientId = Optional.of("client");
+            manager.clientSecret = Optional.of("secret");
             manager.timeoutMs = 2000;
             manager.tokenRefreshMarginSeconds = 300;
             manager.init();
@@ -37,6 +38,31 @@ class NpsTokenManagerTest {
             assertThrows(NpsTokenManager.NpsTokenException.class, () -> manager.forceRefresh(Duration.ofMillis(500)));
             assertTrue(Duration.ofNanos(System.nanoTime() - started).toMillis() < 1500);
             assertEquals(2, requests.get());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void missingCredentialsNeverCallNibss() throws Exception {
+        var requests = new AtomicInteger();
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/token", exchange -> {
+            requests.incrementAndGet();
+            exchange.sendResponseHeaders(401, -1);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var manager = new NpsTokenManager();
+            manager.tokenUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/token";
+            manager.timeoutMs = 2000;
+            manager.tokenRefreshMarginSeconds = 300;
+            manager.init();
+            manager.scheduledTokenRefresh();
+            var failure = assertThrows(NpsTokenManager.NpsTokenException.class, manager::getAccessToken);
+            assertEquals("NPS client credentials are not configured", failure.getMessage());
+            assertEquals(0, requests.get());
         } finally {
             server.stop(0);
         }

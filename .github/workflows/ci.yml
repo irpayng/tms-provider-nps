@@ -33,6 +33,12 @@ jobs:
           distribution: 'graalvm'
           cache: maven
 
+      - name: Seed the Eclipse formatter
+        # Keeps the formatting check off download.eclipse.org; see .github/spotless/README.md.
+        run: |
+          mkdir -p ~/.m2/repository/dev/equo
+          tar xzf .github/spotless/eclipse-4.33-p2.tgz -C ~/.m2/repository/dev/equo
+
       - name: Check code formatting
         run: mvn spotless:check -B
 
@@ -78,13 +84,6 @@ jobs:
           distribution: 'graalvm'
           cache: maven
 
-      - name: Clone and install shared libraries
-        run: |
-          git clone https://x-access-token:${{ secrets.GH_PACKAGES_TOKEN }}@github.com/irpayng/tms-core-utils.git /tmp/core-utils
-          git clone https://x-access-token:${{ secrets.GH_PACKAGES_TOKEN }}@github.com/irpayng/tms-provider-client.git /tmp/provider-client
-          mvn -f /tmp/core-utils/pom.xml install -q -B
-          mvn -f /tmp/provider-client/pom.xml install -q -B
-
       - name: Run tests
         run: mvn test -B -Dnet.bytebuddy.experimental=true
         env:
@@ -128,8 +127,6 @@ jobs:
             CACHE_BUST=${{ github.sha }}
           cache-from: type=gha,scope=staging
           cache-to: type=gha,mode=max,scope=staging
-          secrets: |
-            GH_PAT=${{ secrets.GH_PACKAGES_TOKEN }}
 
   # ============================================
   # PUSH PRODUCTION - build native image and push to Docker Hub
@@ -168,5 +165,3 @@ jobs:
             CACHE_BUST=${{ github.sha }}
           cache-from: type=gha,scope=production
           cache-to: type=gha,mode=max,scope=production
-          secrets: |
-            GH_PAT=${{ secrets.GH_PACKAGES_TOKEN }}

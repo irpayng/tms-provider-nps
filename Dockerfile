@@ -17,10 +17,12 @@ RUN ./mvnw package -DskipTests -B
 
 # Runtime stage
 FROM eclipse-temurin:21-jre-alpine AS production
+# Business timezone, as in the other services; override per deployment with TZ.
+ENV TZ=Africa/Lagos
 WORKDIR /app
 
-# Create non-root user
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+# Fixed non-root ids, so the deployment can grant the journal volume to them.
+RUN addgroup -S -g 1001 appgroup && adduser -S -u 1001 -G appgroup appuser
 
 # Copy the built artifact
 COPY --from=build /app/target/quarkus-app/lib/ /app/lib/
@@ -28,14 +30,14 @@ COPY --from=build /app/target/quarkus-app/*.jar /app/
 COPY --from=build /app/target/quarkus-app/app/ /app/app/
 COPY --from=build /app/target/quarkus-app/quarkus/ /app/quarkus/
 
-# Create directories for logs and keys
-RUN mkdir -p /app/logs /etc/nps/keys && \
-    chown -R appuser:appgroup /app /etc/nps
+# Create directories for logs, keys and the adapter journal
+RUN mkdir -p /app/logs /etc/nps/keys /var/lib/nps/journal && \
+    chown -R appuser:appgroup /app /etc/nps /var/lib/nps
 
 USER appuser
 
-EXPOSE 8098
+EXPOSE 8080
 
-ENV JAVA_OPTS="-Dquarkus.http.host=0.0.0.0 -Djava.util.logging.manager=org.jboss.logmanager.LogManager"
+ENV JAVA_OPTS="-XX:MaxRAMPercentage=75 -Dquarkus.http.host=0.0.0.0 -Djava.util.logging.manager=org.jboss.logmanager.LogManager"
 
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/quarkus-run.jar"]

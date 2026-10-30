@@ -7,7 +7,6 @@ import com.provider.nps.dto.ProviderRequest;
 import com.provider.nps.dto.ProviderResponse;
 import com.provider.nps.internal.AdapterJournal;
 import com.provider.nps.internal.InboundConflictException;
-import com.provider.nps.logging.NpsTransactionLogger;
 import com.provider.nps.message.Acmt023Builder;
 import com.provider.nps.message.NpsResponseParser;
 import com.provider.nps.message.NpsResponseParser.NameEnquiryResponse;
@@ -44,9 +43,6 @@ public class NpsOperations {
     @Inject
     NpsResponseParser responseParser;
 
-    @Inject
-    NpsTransactionLogger transactionLogger;
-
     public ProviderResponse execute(ProviderRequest request) {
         Log.infof("NPS operation: action=%s ref=%s", request.getAction(), request.getReference());
         return switch (request.getAction()) {
@@ -63,7 +59,6 @@ public class NpsOperations {
      */
     private ProviderResponse handleNameEnquiry(ProviderRequest request) {
         String ref = request.getReference();
-        long startTime = System.currentTimeMillis();
 
         try {
             String accountNumber = request.getMetadataOrDefault("account_number", "");
@@ -81,11 +76,7 @@ public class NpsOperations {
             String originalMessageId = NpsXml.text(NpsXml.parse(xml), "Document/IdVrfctnReq/Assgnmt/MsgId");
 
             // Send to NPS
-            NpsResponse npsResponse = npsClient.sendNameEnquiry(xml);
-            long durationMs = System.currentTimeMillis() - startTime;
-
-            // Log to Kafka
-            transactionLogger.logNameEnquiry(ref, accountNumber, bankCode, npsResponse, durationMs);
+            NpsResponse npsResponse = npsClient.sendNameEnquiry(ref, xml);
 
             if (!npsResponse.isSuccess()) {
                 return ProviderResponse.failed(
@@ -125,7 +116,6 @@ public class NpsOperations {
 
         } catch (Exception e) {
             Log.error("Name enquiry failed", e);
-            transactionLogger.logClientEvent(ref, "name-enquiry", "ERROR", e.getMessage());
             return ProviderResponse.failed("Name enquiry error: " + e.getMessage(), ref);
         }
     }
@@ -174,7 +164,6 @@ public class NpsOperations {
      */
     private ProviderResponse handleBankTransfer(ProviderRequest request, Consumer<String> checkpoint) {
         String ref = request.getReference();
-        long startTime = System.currentTimeMillis();
         String originalMessageId = null;
         String transferDetails = null;
 
@@ -198,8 +187,6 @@ public class NpsOperations {
             if (request.getAmount() == null || request.getAmount().signum() <= 0) {
                 return ProviderResponse.failed("Invalid amount", ref);
             }
-
-            String amount = request.getAmount().toPlainString();
 
             // Build credit transfer request
             CreditTransferRequest transferRequest = new CreditTransferRequest();
@@ -225,11 +212,7 @@ public class NpsOperations {
             checkpoint.accept(serialize(uncertain));
 
             // Send to NPS
-            NpsResponse npsResponse = npsClient.sendCreditTransfer(xml);
-            long durationMs = System.currentTimeMillis() - startTime;
-
-            // Log to Kafka
-            transactionLogger.logBankTransfer(ref, creditorAccount, creditorBankCode, amount, npsResponse, durationMs);
+            NpsResponse npsResponse = npsClient.sendCreditTransfer(ref, xml);
 
             if (!npsResponse.isSuccess()) {
                 // Transport or authenticity failure is not a verified payment rejection.
@@ -271,7 +254,6 @@ public class NpsOperations {
                 return ProviderResponse.failed(e.getMessage(), ref);
             }
             Log.error("Bank transfer failed", e);
-            transactionLogger.logClientEvent(ref, "bank-transfer", "ERROR", e.getMessage());
             return withData(
                     ProviderResponse.pendingWithReference("Transfer error - requery required", originalMessageId, ref),
                     transferDetails);
@@ -284,7 +266,6 @@ public class NpsOperations {
      */
     private ProviderResponse handleRequery(ProviderRequest request) {
         String ref = request.getReference();
-        long startTime = System.currentTimeMillis();
 
         try {
             String originalMsgId = request.getMetadataOrDefault("original_msg_id", "");
@@ -309,11 +290,7 @@ public class NpsOperations {
             }
 
             // Send to NPS
-            NpsResponse npsResponse = npsClient.sendPaymentStatusRequest(xml);
-            long durationMs = System.currentTimeMillis() - startTime;
-
-            // Log to Kafka
-            transactionLogger.logRequery(ref, originalMsgId, npsResponse, durationMs);
+            NpsResponse npsResponse = npsClient.sendPaymentStatusRequest(ref, xml);
 
             if (!npsResponse.isSuccess()) {
                 return ProviderResponse.pending("Requery failed: "
@@ -342,7 +319,6 @@ public class NpsOperations {
 
         } catch (Exception e) {
             Log.error("Requery failed", e);
-            transactionLogger.logClientEvent(ref, "requery", "ERROR", e.getMessage());
             return ProviderResponse.pending("Requery error: " + e.getMessage(), ref);
         }
     }

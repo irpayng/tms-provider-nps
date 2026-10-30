@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -37,10 +38,10 @@ public class NpsTokenManager {
     String tokenUrl;
 
     @ConfigProperty(name = "nps.client-id")
-    String clientId;
+    Optional<String> clientId = Optional.empty();
 
     @ConfigProperty(name = "nps.client-secret")
-    String clientSecret;
+    Optional<String> clientSecret = Optional.empty();
 
     @ConfigProperty(name = "nps.token-refresh-margin-seconds", defaultValue = "300")
     int tokenRefreshMarginSeconds;
@@ -58,6 +59,12 @@ public class NpsTokenManager {
     @PostConstruct
     void init() {
         httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofMillis(timeoutMs)).build();
+
+        if (!credentialsConfigured()) {
+            Log.warn("NPS client credentials are not configured; NIBSS calls fail until NPS_CLIENT_ID and "
+                    + "NPS_CLIENT_SECRET are set");
+            return;
+        }
 
         // Fetch initial token
         try {
@@ -111,6 +118,11 @@ public class NpsTokenManager {
         return Duration.ofNanos(remaining);
     }
 
+    private boolean credentialsConfigured() {
+        return clientId.filter(value -> !value.isBlank()).isPresent()
+                && clientSecret.filter(value -> !value.isBlank()).isPresent();
+    }
+
     /**
      * Checks if we have a valid token that won't expire soon.
      */
@@ -130,6 +142,9 @@ public class NpsTokenManager {
     }
 
     private void refreshToken(long deadline) {
+        if (!credentialsConfigured()) {
+            throw new NpsTokenException("NPS client credentials are not configured");
+        }
         Exception lastException = null;
 
         for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -164,7 +179,7 @@ public class NpsTokenManager {
 
     private void fetchNewToken(long deadline) throws Exception {
         // Build Basic auth header
-        String credentials = clientId + ":" + clientSecret;
+        String credentials = clientId.orElseThrow() + ":" + clientSecret.orElseThrow();
         String basicAuth = "Basic " + Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
 
         // Build request body (client_credentials grant)
@@ -208,7 +223,7 @@ public class NpsTokenManager {
      */
     @Scheduled(every = "5m")
     void scheduledTokenRefresh() {
-        if (!isTokenValid()) {
+        if (credentialsConfigured() && !isTokenValid()) {
             Log.info("Scheduled token refresh triggered");
             lock.lock();
             try {

@@ -7,7 +7,6 @@ import com.provider.nps.client.NpsClient.NpsResponse;
 import com.provider.nps.grpc.ProviderExecuteRequest;
 import com.provider.nps.grpc.ProviderExecuteResponse;
 import com.provider.nps.grpc.ProviderGrpcService;
-import com.provider.nps.logging.NpsTransactionLogger;
 import com.provider.nps.message.NpsResponseParser;
 import com.provider.nps.message.Pacs008Builder;
 import com.provider.nps.message.Pacs028Builder;
@@ -48,11 +47,11 @@ class ProviderGrpcSafetyTest {
         }
         service.npsClient = new NpsClient() {
             @Override
-            public NpsResponse sendCreditTransfer(String xml) {
+            public NpsResponse sendCreditTransfer(String reference, String xml) {
                 return response;
             }
             @Override
-            public NpsResponse sendPaymentStatusRequest(String xml) {
+            public NpsResponse sendPaymentStatusRequest(String reference, String xml) {
                 return response;
             }
         };
@@ -70,14 +69,6 @@ class ProviderGrpcSafetyTest {
             }
         };
         service.responseParser = new NpsResponseParser();
-        service.transactionLogger = new NpsTransactionLogger() {
-            @Override
-            public void logTransaction(NpsTransactionLog log) {
-            }
-            @Override
-            public void logClientEvent(String reference, String action, String status, String message) {
-            }
-        };
         return service;
     }
 
@@ -119,9 +110,9 @@ class ProviderGrpcSafetyTest {
         var sends = new java.util.concurrent.atomic.AtomicInteger();
         service.npsClient = new NpsClient() {
             @Override
-            public NpsResponse sendCreditTransfer(String xml) throws Exception {
+            public NpsResponse sendCreditTransfer(String reference, String xml) throws Exception {
                 sends.incrementAndGet();
-                return originalClient.sendCreditTransfer(xml);
+                return originalClient.sendCreditTransfer(reference, xml);
             }
         };
         assertEquals("success", execute(service, transfer(100)).getStatus());
@@ -135,7 +126,7 @@ class ProviderGrpcSafetyTest {
         var sends = new java.util.concurrent.atomic.AtomicInteger();
         service.npsClient = new NpsClient() {
             @Override
-            public NpsResponse sendCreditTransfer(String xml) throws Exception {
+            public NpsResponse sendCreditTransfer(String reference, String xml) throws Exception {
                 sends.incrementAndGet();
                 throw new HttpTimeoutException("No response");
             }
@@ -175,7 +166,7 @@ class ProviderGrpcSafetyTest {
         var service = service("", false);
         service.npsClient = new NpsClient() {
             @Override
-            public NpsResponse sendCreditTransfer(String xml) throws Exception {
+            public NpsResponse sendCreditTransfer(String reference, String xml) throws Exception {
                 throw new HttpTimeoutException("No response");
             }
         };

@@ -56,6 +56,9 @@ public class NpsClient {
     @Inject
     NpsXmlEncryptor xmlEncryptor;
 
+    @Inject
+    ClientLogPublisher clientLogs;
+
     private HttpClient httpClient;
 
     @PostConstruct
@@ -66,52 +69,60 @@ public class NpsClient {
 
     /**
      * Sends a name enquiry request (acmt.023).
-     * 
+     *
+     * @param reference
+     *            Our transaction reference, for the client log
      * @param xml
      *            The unsigned XML message
      * @return The NPS response
      */
-    public NpsResponse sendNameEnquiry(String xml) throws Exception {
-        return sendRequest(nameEnquiryPath, xml);
+    public NpsResponse sendNameEnquiry(String reference, String xml) throws Exception {
+        return sendRequest(reference, nameEnquiryPath, xml);
     }
 
     /**
      * Sends a credit transfer request (pacs.008).
-     * 
+     *
+     * @param reference
+     *            Our transaction reference, for the client log
      * @param xml
      *            The unsigned XML message
      * @return The NPS response
      */
-    public NpsResponse sendCreditTransfer(String xml) throws Exception {
-        return sendRequest(creditTransferPath, xml);
+    public NpsResponse sendCreditTransfer(String reference, String xml) throws Exception {
+        return sendRequest(reference, creditTransferPath, xml);
     }
 
     /**
      * Sends a payment initiation request (pain.001).
-     * 
+     *
+     * @param reference
+     *            Our transaction reference, for the client log
      * @param xml
      *            The unsigned XML message
      * @return The NPS response
      */
-    public NpsResponse sendPaymentInitiation(String xml) throws Exception {
-        return sendRequest(paymentInitiationPath, xml);
+    public NpsResponse sendPaymentInitiation(String reference, String xml) throws Exception {
+        return sendRequest(reference, paymentInitiationPath, xml);
     }
 
     /**
      * Sends a payment status request / requery (pacs.028).
-     * 
+     *
+     * @param reference
+     *            Our transaction reference, for the client log
      * @param xml
      *            The unsigned XML message
      * @return The NPS response
      */
-    public NpsResponse sendPaymentStatusRequest(String xml) throws Exception {
-        return sendRequest(requeryPath, xml);
+    public NpsResponse sendPaymentStatusRequest(String reference, String xml) throws Exception {
+        return sendRequest(reference, requeryPath, xml);
     }
 
     /**
      * Core method to send request to NPS with signing and encryption.
      */
-    private NpsResponse sendRequest(String endpoint, String xml) throws Exception {
+    private NpsResponse sendRequest(String reference, String endpoint, String xml) throws Exception {
         long deadline = System.nanoTime() + Duration.ofMillis(timeoutMs).toNanos();
         String url = baseUrl + endpoint;
         Log.debugf("Sending NPS request to: %s", url);
@@ -130,16 +141,17 @@ public class NpsClient {
 
         }
 
-        HttpResponse<String> response = sendHttpRequest(url, requestXml, deadline);
+        HttpResponse<String> response = sendHttpRequest(reference, url, requestXml, deadline);
         if (response.statusCode() == 401) {
             Log.warn("Received 401 from NPS, refreshing token and retrying once");
             tokenManager.forceRefresh(remainingTime(deadline));
-            response = sendHttpRequest(url, requestXml, deadline);
+            response = sendHttpRequest(reference, url, requestXml, deadline);
         }
         return processResponse(response, endpoint, requestXml);
     }
 
-    private HttpResponse<String> sendHttpRequest(String url, String requestXml, long deadline) throws Exception {
+    private HttpResponse<String> sendHttpRequest(String reference, String url, String requestXml, long deadline)
+            throws Exception {
         String token = tokenManager.getAccessToken(remainingTime(deadline));
         long remainingNanos = deadline - System.nanoTime();
         if (remainingNanos <= 0) {
@@ -148,7 +160,24 @@ public class NpsClient {
         HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).timeout(Duration.ofNanos(remainingNanos))
                 .header("Authorization", "Bearer " + token).header("Content-Type", "application/xml")
                 .header("Accept", "application/xml").POST(HttpRequest.BodyPublishers.ofString(requestXml)).build();
-        return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        long started = System.nanoTime();
+        try {
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            logExchange(reference, url, requestXml, response.statusCode(), response.body(), started);
+            return response;
+        } catch (Exception e) {
+            // Status 0 marks a transport failure, as provider-client records it.
+            logExchange(reference, url, requestXml, 0, e.getMessage(), started);
+            throw e;
+        }
+    }
+
+    private void logExchange(String reference, String url, String requestXml, int status, String responseBody,
+            long started) {
+        if (clientLogs != null) {
+            clientLogs.publish(reference, url, requestXml, status, responseBody,
+                    Duration.ofNanos(System.nanoTime() - started).toMillis());
+        }
     }
 
     private Duration remainingTime(long deadline) throws java.net.http.HttpTimeoutException {

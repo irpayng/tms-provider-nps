@@ -98,9 +98,9 @@ No local account or ledger implementation is introduced.
 ### Swagger UI for HTTP testing
 
 Run `./mvnw.cmd quarkus:dev` on Windows (or `./mvnw quarkus:dev` on Unix), then open
-[Swagger UI](http://localhost:8098/q/swagger-ui/). The OpenAPI document is available
-at `/q/openapi` (JSON with `Accept: application/json`). Use your configured
-`APP_PORT` if it differs from 8098.
+Swagger UI at `http://localhost:<APP_PORT>/q/swagger-ui/`. The OpenAPI document is
+available at `/q/openapi` (JSON with `Accept: application/json`). `APP_PORT`
+defaults to 8080, the cluster convention; set a free local port in `.env`.
 
 Expand **NPS JSON operations**, choose an endpoint, click **Try it out**, edit the
 example JSON, and click **Execute**. Name enquiry, transfer, requery, and generic
@@ -324,15 +324,14 @@ existing commits or stop tracking an already committed file.
 ### Docker
 ```bash
 docker build -t provider-nps .
-docker run -p 8098:8098 provider-nps
+docker run -p 8080:8080 provider-nps
 ```
 
 ## Kafka Topics
 
 | Topic | Direction | Description |
 |-------|-----------|-------------|
-| nps-logs | Outbound | Transaction logs with XML payloads |
-| client-logs | Outbound | Client-level events |
+| client-logs | Outbound | Every NIBSS HTTP exchange, in the logger service's shape; bodies are the signed, encrypted wire payloads |
 | nps-inbound-transfers | Outbound | Inbound credit transfer notifications |
 | nps-status-updates | Outbound | Async status update notifications |
 
